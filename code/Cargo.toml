@@ -10,7 +10,8 @@ edition = "2018"
 rand = "0.6.0"
 
 ed25519-dalek = "1.0.0-pre.1"
-sodiumoxide = "0.2.4"
+sodiumoxide = { git = "https://github.com/Dhole/sodiumoxidez", branch = "extra" }
 
 base64 = "0.10.1"
+hex = "0.3.2"
 get_if_addrs = "0.5.3"
