@@ -16,3 +16,6 @@ base64 = "0.10.1"
 hex = "0.3.2"
 get_if_addrs = "0.5.3"
 arrayref = "0.3.5"
+
+async-std = "0.99"
+futures-preview = { version = "=0.3.0-alpha.18" }
