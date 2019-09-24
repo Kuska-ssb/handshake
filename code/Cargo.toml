@@ -18,5 +18,4 @@ get_if_addrs = "0.5.3"
 arrayref = "0.3.5"
 
 async-std = "0.99"
-futures-preview = { version = "=0.3.0-alpha.18", features = ["async-await", "nightly"] }
-futures-io-preview = "0.3.0-alpha.18"
+futures-preview = { version = "=0.3.0-alpha.18"}
