@@ -2,12 +2,10 @@
 extern crate arrayref;
 extern crate sodiumoxide;
 
-use std::pin::{
-    Pin,
+use std::{
+    pin::Pin,
+    cmp,
 };
-
-use std::cmp;
-
 use sodiumoxide::crypto::{
     secretbox,
     hash::sha256,
@@ -15,8 +13,8 @@ use sodiumoxide::crypto::{
     auth,
     scalarmult::curve25519,
 };
-use futures::io;
 use futures::io::{
+    self,
     AsyncRead,
     AsyncWrite,
 };
