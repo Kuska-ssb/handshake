@@ -177,6 +177,7 @@ fn decrypt_box_stream(recv: &mut BoxStreamRecv) -> io::Result<usize> {
         ) {
             Ok(b) => {
                 recv.key_nonce.nonce.increment_le_inplace();
+                recv.header = None; // Set the header to None in order to read it in the next iter.
                 b
             },
             Err(()) => {
