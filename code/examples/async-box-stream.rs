@@ -25,6 +25,19 @@ use futures::task::{
     Poll,
 };
 
+mod handshake {
+    pub enum State {
+        ClientHello,
+        ServerHello,
+        ClientAuth,
+        ServerAccept,
+    }
+    pub struct Handshake {
+        state: State
+    }
+}
+
+
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
 // Length of decrypted header (body_len || enc_body_mac)
