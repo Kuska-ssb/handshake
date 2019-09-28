@@ -26,15 +26,167 @@ use futures::task::{
 };
 
 mod handshake {
-    pub enum State {
-        ClientHello,
-        ServerHello,
-        ClientAuth,
-        ServerAccept,
+    use std::{
+        io::Result,
+        io::Read,
+        io::Write,
+    };
+    use sodiumoxide::crypto::{
+        sign::ed25519,
+        auth,
+        hash::sha256,
+        secretbox,
+        scalarmult::curve25519,
+    };
+
+    pub struct HandshakeBase<T> {
+        stream: T,
+        net_id: auth::Key,
+        pk: ed25519::PublicKey,
+        sk: ed25519::SecretKey,
+        ephemeral_pk: curve25519::GroupElement,
+        ephemeral_sk: curve25519::Scalar,
     }
-    pub struct Handshake {
-        state: State
+
+    pub struct Handshake<T, S: State> {
+        base: HandshakeBase<T>,
+        state: S,
     }
+
+    // Client States
+    struct SendClientHello {
+        server_pk: ed25519::PublicKey,
+    }
+    struct RecvServerHello {
+        server_pk: ed25519::PublicKey,
+    }
+    struct SendClientAuth;
+    struct RecvServerAccept;
+
+    // Server States
+    struct RecvClientHello;
+    struct SendServerHello;
+    struct RecvClientAuth;
+    struct SendServerAccept;
+
+    // Shared States
+    struct Complete;
+
+    pub trait State {}
+    impl State for SendClientHello {}
+    impl State for RecvServerHello {}
+    impl State for SendClientAuth {}
+    impl State for RecvServerAccept {}
+
+    impl State for RecvClientHello {}
+    impl State for SendServerHello {}
+    impl State for RecvClientAuth {}
+    impl State for SendServerAccept {}
+
+    impl State for Complete {}
+
+    // Client
+    impl<T, S: State> Handshake<T, S> {
+        fn new_client(
+            stream: T,
+            net_id: auth::Key,
+            pk: ed25519::PublicKey,
+            sk: ed25519::SecretKey,
+            server_pk: ed25519::PublicKey) -> Handshake<T, SendClientHello> {
+            let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
+            let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
+            let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
+            let state = SendClientHello{ server_pk };
+            let base = HandshakeBase{ stream, net_id, pk, sk, ephemeral_pk, ephemeral_sk };
+            Handshake{ base, state }
+        }
+    }
+
+    impl<T: Write> Handshake<T, SendClientHello> {
+        fn send_client_hello(mut self) -> Result<Handshake<T, RecvServerHello>> {
+            let msg = [
+                auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
+                self.base.ephemeral_pk.as_ref(),
+            ].concat();
+            self.base.stream.write_all(&msg)?;
+            self.base.stream.flush()?;
+            let state = RecvServerHello{ server_pk: self.state.server_pk };
+            Ok(Handshake{ base: self.base, state: state })
+        }
+    }
+
+    impl<T: Read> Handshake<T, RecvServerHello> {
+        fn recv_server_hello(mut self) -> Result<Handshake<T, SendClientAuth>> {
+            let mut msg = [0; 64];
+            self.base.stream.read_exact(&msg)?;
+            let state = SendClientAuth;
+            Ok(Handshake{ base: self.base, state: state })
+        }
+    }
+
+    // impl<T: Write> Handshake<T, SendClientAuth> {
+    //     fn send_client_auth(self) -> Result<Handshake<T, RecvServerAccept>> {
+    //         Ok(Handshake{
+    //             stream: self.stream,
+    //             state: RecvServerAccept,
+    //         })
+    //     }
+    // }
+
+    // impl<T: Read> Handshake<T, RecvServerAccept> {
+    //     fn recv_server_accept(self) -> Result<Handshake<T, Complete>> {
+    //         Ok(Handshake{
+    //             stream: self.stream,
+    //             state: Complete,
+    //         })
+    //     }
+    // }
+
+    // // Server
+    // // impl<T, S: State> Handshake<T, S> {
+    // //     fn new_server(stream: T) -> Handshake<T, RecvClientHello> {
+    // //         Handshake{
+    // //             stream: stream,
+    // //             state: RecvClientHello,
+    // //         }
+    // //     }
+    // // }
+
+    // impl<T: Read> Handshake<T, RecvClientHello> {
+    //     fn send_client_hello(self) -> Result<Handshake<T, SendServerHello>> {
+    //         Ok(Handshake{
+    //             stream: self.stream,
+    //             state: SendServerHello,
+    //         })
+    //     }
+    // }
+
+    // impl<T: Write> Handshake<T, SendServerHello> {
+    //     fn recv_server_hello(self) -> Result<Handshake<T, RecvClientAuth>> {
+    //         Ok(Handshake{
+    //             stream: self.stream,
+    //             state: RecvClientAuth,
+    //         })
+    //     }
+    // }
+
+    // impl<T: Read> Handshake<T, RecvClientAuth> {
+    //     fn send_client_auth(self) -> Result<Handshake<T, SendServerAccept>> {
+    //         Ok(Handshake{
+    //             stream: self.stream,
+    //             state: SendServerAccept,
+    //         })
+    //     }
+    // }
+
+    // impl<T: Write> Handshake<T, SendServerAccept> {
+    //     fn recv_server_accept(self) -> Result<Handshake<T, Complete>> {
+    //         Ok(Handshake{
+    //             stream: self.stream,
+    //             state: Complete,
+    //         })
+    //     }
+    // }
 }
 
 
