@@ -27,6 +27,7 @@ use futures::task::{
 
 mod handshake {
     use std::{
+        io,
         io::Result,
         io::Read,
         io::Write,
@@ -54,12 +55,8 @@ mod handshake {
     }
 
     // Client States
-    struct SendClientHello {
-        server_pk: ed25519::PublicKey,
-    }
-    struct RecvServerHello {
-        server_pk: ed25519::PublicKey,
-    }
+    struct SendClientHello;
+    struct RecvServerHello;
     struct SendClientAuth;
     struct RecvServerAccept;
 
@@ -91,12 +88,11 @@ mod handshake {
             stream: T,
             net_id: auth::Key,
             pk: ed25519::PublicKey,
-            sk: ed25519::SecretKey,
-            server_pk: ed25519::PublicKey) -> Handshake<T, SendClientHello> {
+            sk: ed25519::SecretKey) -> Handshake<T, SendClientHello> {
             let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
             let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
             let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
-            let state = SendClientHello{ server_pk };
+            let state = SendClientHello;
             let base = HandshakeBase{ stream, net_id, pk, sk, ephemeral_pk, ephemeral_sk };
             Handshake{ base, state }
         }
@@ -104,21 +100,35 @@ mod handshake {
 
     impl<T: Write> Handshake<T, SendClientHello> {
         fn send_client_hello(mut self) -> Result<Handshake<T, RecvServerHello>> {
-            let msg = [
+            let send = [
                 auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
                 self.base.ephemeral_pk.as_ref(),
             ].concat();
-            self.base.stream.write_all(&msg)?;
+            self.base.stream.write_all(&send)?;
             self.base.stream.flush()?;
-            let state = RecvServerHello{ server_pk: self.state.server_pk };
+            let state = RecvServerHello;
             Ok(Handshake{ base: self.base, state: state })
         }
     }
 
     impl<T: Read> Handshake<T, RecvServerHello> {
-        fn recv_server_hello(mut self) -> Result<Handshake<T, SendClientAuth>> {
-            let mut msg = [0; 64];
-            self.base.stream.read_exact(&msg)?;
+        fn recv_server_hello(
+            mut self,
+            server_pk: ed25519::PublicKey) -> Result<Handshake<T, SendClientAuth>> {
+            let mut recv = [0; 64];
+            self.base.stream.read_exact(&mut recv)?;
+            let server_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
+            let server_ephemeral_pk = curve25519::GroupElement::from_slice(&recv[32..]).unwrap();
+            if !auth::verify(&server_hmac, server_ephemeral_pk.as_ref(), &self.base.net_id) {
+                return Err(io::Error::new(io::ErrorKind::Other,
+                        "auth::verify failed in recv_server_hello"));
+            }
+            let shared_secret_ab = curve25519::scalarmult(
+                &self.base.ephemeral_sk,
+                &server_ephemeral_pk).unwrap();
+            let shared_secret_aB = curve25519::scalarmult(
+                &self.base.ephemeral_sk,
+                &server_pk.to_curve25519()).unwrap();
             let state = SendClientAuth;
             Ok(Handshake{ base: self.base, state: state })
         }
