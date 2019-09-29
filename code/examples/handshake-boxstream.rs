@@ -1,17 +1,17 @@
-extern crate code;
 extern crate base64;
+extern crate code;
 
-use std::env;
-use std::net::{TcpListener, TcpStream};
 use sodiumoxide::crypto::{auth, sign::ed25519};
-use std::io;
+use std::env;
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
 
 use code::handshake::{Handshake, SharedSecret};
 
 fn usage(arg0: &str) {
     eprintln!(
         "Usage: {0} [client/server] OPTS
-    client OPTS: server_pk addr
+    client OPTS: addr server_pk
     server OPTS: addr",
         arg0
     );
@@ -39,6 +39,17 @@ fn test_server(
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
     print_shared_secret(&handshake.state.shared_secret);
+
+    let mut box_stream = handshake.to_box_stream(0x8000);
+
+    io::copy(&mut box_stream, &mut io::stdout())?;
+    // box_stream.write(b"I'm the server")?;
+    // box_stream.flush()?;
+    // let mut buf = [0; 0x1000];
+    // let n = box_stream.read(&mut buf)?;
+    // println!("Received:");
+    // io::stdout().write_all(&buf[..n])?;
+    // println!();
     Ok(())
 }
 
@@ -57,6 +68,15 @@ fn test_client(
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
     print_shared_secret(&handshake.state.shared_secret);
+    let mut box_stream = handshake.to_box_stream(0x8000);
+    io::copy(&mut io::stdin(), &mut box_stream)?;
+    // box_stream.write(b"I'm the client")?;
+    // box_stream.flush()?;
+    // let mut buf = [0; 0x1000];
+    // let n = box_stream.read(&mut buf)?;
+    // println!("Received:");
+    // io::stdout().write_all(&buf[..n])?;
+    // println!();
     Ok(())
 }
 
@@ -79,9 +99,9 @@ fn main() -> io::Result<()> {
                 usage(&args[0]);
                 return Ok(());
             }
-            let server_pk_buf = base64::decode_config(args[2].as_str(), base64::STANDARD).unwrap();
+            let server_pk_buf = base64::decode_config(args[3].as_str(), base64::STANDARD).unwrap();
             let server_pk = ed25519::PublicKey::from_slice(&server_pk_buf).unwrap();
-            let socket = TcpStream::connect(args[3].as_str())?;
+            let socket = TcpStream::connect(args[2].as_str())?;
             test_client(socket, net_id, pk, sk, server_pk)
         }
         "server" => {
