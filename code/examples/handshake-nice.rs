@@ -1,17 +1,17 @@
-extern crate code;
 extern crate base64;
+extern crate code;
 
-use std::env;
-use std::net::{TcpListener, TcpStream};
 use sodiumoxide::crypto::{auth, sign::ed25519};
+use std::env;
 use std::io;
+use std::net::{TcpListener, TcpStream};
 
 use code::handshake::{Handshake, SharedSecret};
 
 fn usage(arg0: &str) {
     eprintln!(
         "Usage: {0} [client/server] OPTS
-    client OPTS: server_pk addr
+    client OPTS: addr server_pk
     server OPTS: addr",
         arg0
     );
@@ -31,7 +31,7 @@ fn test_server(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_server(socket, net_id, pk, sk)
+    let handshake = Handshake::new_server(&socket, &socket, net_id, pk, sk)
         .recv_client_hello()?
         .send_server_hello()?
         .recv_client_auth()?
@@ -49,7 +49,7 @@ fn test_client(
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_client(socket, net_id, pk, sk)
+    let handshake = Handshake::new_client(&socket, &socket, net_id, pk, sk)
         .send_client_hello()?
         .recv_server_hello()?
         .send_client_auth(server_pk)?
@@ -79,9 +79,9 @@ fn main() -> io::Result<()> {
                 usage(&args[0]);
                 return Ok(());
             }
-            let server_pk_buf = base64::decode_config(args[2].as_str(), base64::STANDARD).unwrap();
+            let server_pk_buf = base64::decode_config(args[3].as_str(), base64::STANDARD).unwrap();
             let server_pk = ed25519::PublicKey::from_slice(&server_pk_buf).unwrap();
-            let socket = TcpStream::connect(args[3].as_str())?;
+            let socket = TcpStream::connect(args[2].as_str())?;
             test_client(socket, net_id, pk, sk, server_pk)
         }
         "server" => {

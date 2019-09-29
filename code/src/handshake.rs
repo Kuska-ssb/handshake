@@ -21,8 +21,9 @@ pub struct SharedSecret {
 }
 
 #[derive(Debug)]
-pub struct HandshakeBase<T> {
-    stream: T,
+pub struct HandshakeBase<R, W> {
+    read_stream: R,
+    write_stream: W,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
@@ -31,8 +32,8 @@ pub struct HandshakeBase<T> {
 }
 
 #[derive(Debug)]
-pub struct Handshake<T, S: State> {
-    pub base: HandshakeBase<T>,
+pub struct Handshake<R, W, S: State> {
+    pub base: HandshakeBase<R, W>,
     pub state: S,
 }
 
@@ -114,19 +115,21 @@ fn scalarmult_error_new(fn_name: &str, a: &str, b: &str) -> io::Error {
 }
 
 // Client
-impl<T> Handshake<T, SendClientHello> {
+impl<R, W> Handshake<R, W, SendClientHello> {
     pub fn new_client(
-        stream: T,
+        read_stream: R,
+        write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> Handshake<T, SendClientHello> {
+    ) -> Handshake<R, W, SendClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
         let state = SendClientHello;
         let base = HandshakeBase {
-            stream,
+            read_stream,
+            write_stream,
             net_id,
             pk,
             sk,
@@ -137,15 +140,15 @@ impl<T> Handshake<T, SendClientHello> {
     }
 }
 
-impl<T: Write> Handshake<T, SendClientHello> {
-    pub fn send_client_hello(mut self) -> Result<Handshake<T, RecvServerHello>> {
+impl<R, W: Write> Handshake<R, W, SendClientHello> {
+    pub fn send_client_hello(mut self) -> Result<Handshake<R, W, RecvServerHello>> {
         let send = [
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
             self.base.ephemeral_pk.as_ref(),
         ]
         .concat();
-        self.base.stream.write_all(&send)?;
-        self.base.stream.flush()?;
+        self.base.write_stream.write_all(&send)?;
+        self.base.write_stream.flush()?;
         let state = RecvServerHello;
         Ok(Handshake {
             base: self.base,
@@ -154,10 +157,10 @@ impl<T: Write> Handshake<T, SendClientHello> {
     }
 }
 
-impl<T: Read> Handshake<T, RecvServerHello> {
-    pub fn recv_server_hello(mut self) -> Result<Handshake<T, SendClientAuth>> {
+impl<R: Read, W> Handshake<R, W, RecvServerHello> {
+    pub fn recv_server_hello(mut self) -> Result<Handshake<R, W, SendClientAuth>> {
         let mut recv = [0; 64];
-        self.base.stream.read_exact(&mut recv)?;
+        self.base.read_stream.read_exact(&mut recv)?;
         let server_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
         let server_ephemeral_pk = curve25519::GroupElement::from_slice(&recv[32..]).unwrap();
         if !auth::verify(
@@ -176,11 +179,11 @@ impl<T: Read> Handshake<T, RecvServerHello> {
     }
 }
 
-impl<T: Write> Handshake<T, SendClientAuth> {
+impl<R, W: Write> Handshake<R, W, SendClientAuth> {
     pub fn send_client_auth(
         mut self,
         server_pk: ed25519::PublicKey,
-    ) -> Result<Handshake<T, RecvServerAccept>> {
+    ) -> Result<Handshake<R, W, RecvServerAccept>> {
         let fn_error = |a, b| Err(scalarmult_error_new("send_client_auth", a, b));
         let shared_secret = SharedSecret {
             ab: curve25519::scalarmult(&self.base.ephemeral_sk, &self.state.server_ephemeral_pk)
@@ -217,8 +220,8 @@ impl<T: Write> Handshake<T, SendClientAuth> {
                 .0,
             ),
         );
-        self.base.stream.write_all(&send)?;
-        self.base.stream.flush()?;
+        self.base.write_stream.write_all(&send)?;
+        self.base.write_stream.flush()?;
         Ok(Handshake {
             base: self.base,
             state: RecvServerAccept {
@@ -231,10 +234,10 @@ impl<T: Write> Handshake<T, SendClientAuth> {
     }
 }
 
-impl<T: Read> Handshake<T, RecvServerAccept> {
-    pub fn recv_server_accept(mut self) -> Result<Handshake<T, Complete>> {
+impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
+    pub fn recv_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
         let mut recv_enc = [0; 80];
-        self.base.stream.read_exact(&mut recv_enc)?;
+        self.base.read_stream.read_exact(&mut recv_enc)?;
         let recv = secretbox::open(
             &recv_enc,
             &secretbox::Nonce([0; 24]),
@@ -282,19 +285,21 @@ impl<T: Read> Handshake<T, RecvServerAccept> {
 }
 
 // Server
-impl<T> Handshake<T, RecvClientHello> {
+impl<R, W> Handshake<R, W, RecvClientHello> {
     pub fn new_server(
-        stream: T,
+        read_stream: R,
+        write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> Handshake<T, RecvClientHello> {
+    ) -> Handshake<R, W, RecvClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
         Handshake {
             base: HandshakeBase {
-                stream,
+                read_stream,
+                write_stream,
                 net_id,
                 pk,
                 sk,
@@ -306,10 +311,10 @@ impl<T> Handshake<T, RecvClientHello> {
     }
 }
 
-impl<T: Read> Handshake<T, RecvClientHello> {
-    pub fn recv_client_hello(mut self) -> Result<Handshake<T, SendServerHello>> {
+impl<R: Read, W> Handshake<R, W, RecvClientHello> {
+    pub fn recv_client_hello(mut self) -> Result<Handshake<R, W, SendServerHello>> {
         let mut recv = [0; 64];
-        self.base.stream.read_exact(&mut recv)?;
+        self.base.read_stream.read_exact(&mut recv)?;
         let client_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
         let client_ephemeral_pk = curve25519::GroupElement::from_slice(&recv[32..]).unwrap();
         if !auth::verify(
@@ -336,15 +341,15 @@ impl<T: Read> Handshake<T, RecvClientHello> {
     }
 }
 
-impl<T: Write> Handshake<T, SendServerHello> {
-    pub fn send_server_hello(mut self) -> Result<Handshake<T, RecvClientAuth>> {
+impl<R, W: Write> Handshake<R, W, SendServerHello> {
+    pub fn send_server_hello(mut self) -> Result<Handshake<R, W, RecvClientAuth>> {
         let send = [
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
             self.base.ephemeral_pk.as_ref(),
         ]
         .concat();
-        self.base.stream.write_all(&send)?;
-        self.base.stream.flush()?;
+        self.base.write_stream.write_all(&send)?;
+        self.base.write_stream.flush()?;
         Ok(Handshake {
             base: self.base,
             state: RecvClientAuth {
@@ -355,10 +360,10 @@ impl<T: Write> Handshake<T, SendServerHello> {
     }
 }
 
-impl<T: Read> Handshake<T, RecvClientAuth> {
-    pub fn recv_client_auth(mut self) -> Result<Handshake<T, SendServerAccept>> {
+impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
+    pub fn recv_client_auth(mut self) -> Result<Handshake<R, W, SendServerAccept>> {
         let mut recv_enc = [0; 112];
-        self.base.stream.read_exact(&mut recv_enc)?;
+        self.base.read_stream.read_exact(&mut recv_enc)?;
         let recv = secretbox::open(
             &recv_enc,
             &secretbox::Nonce([0; 24]),
@@ -410,8 +415,8 @@ impl<T: Read> Handshake<T, RecvClientAuth> {
     }
 }
 
-impl<T: Write> Handshake<T, SendServerAccept> {
-    pub fn send_server_accept(mut self) -> Result<Handshake<T, Complete>> {
+impl<R, W: Write> Handshake<R, W, SendServerAccept> {
+    pub fn send_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
         let sig = ed25519::sign_detached(
             &[
                 self.base.net_id.as_ref(),
@@ -438,8 +443,8 @@ impl<T: Write> Handshake<T, SendServerAccept> {
                 .0,
             ),
         );
-        self.base.stream.write_all(&send)?;
-        self.base.stream.flush()?;
+        self.base.write_stream.write_all(&send)?;
+        self.base.write_stream.flush()?;
         Ok(Handshake {
             base: self.base,
             state: Complete {
@@ -451,17 +456,18 @@ impl<T: Write> Handshake<T, SendServerAccept> {
     }
 }
 
-impl<T> Handshake<T, Complete> {
-    pub fn to_box_stream(self, recv_buf_len: usize) -> BoxStream<T> {
+impl<R, W> Handshake<R, W, Complete> {
+    pub fn to_box_stream(self, recv_buf_len: usize) -> BoxStream<R, W> {
         BoxStream::new(
-            self.base.stream,
+            self.base.read_stream,
+            self.base.write_stream,
             recv_buf_len,
             self.base.net_id,
             self.base.pk,
             self.base.ephemeral_pk,
             self.state.peer_pk,
             self.state.peer_ephemeral_pk,
-            self.state.shared_secret
+            self.state.shared_secret,
         )
     }
 }
