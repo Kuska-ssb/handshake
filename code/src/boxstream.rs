@@ -140,6 +140,7 @@ impl<R: Read> Read for BoxStreamRead<R> {
         }
         self.enc.copy_within(enc_pos..self.enc_cap, 0);
         self.enc_cap = self.enc_cap - enc_pos;
+        debug!("Read {} bytes", buf_pos);
         Ok(buf_pos)
     }
 }
@@ -356,11 +357,14 @@ impl<W: Write> Write for BoxStreamWrite<W> {
             && self.enc.len() + MSG_HEADER_LEN + MSG_BODY_MAX_LEN < self.enc.capacity()
         {
             n += encrypt_box_stream_msg(&mut self.key_nonce, &buf[n..], &mut self.enc);
+            debug!("Encrypted {} bytes", n);
         }
+        debug!("buf.len: {}, self.enc.len: {}, self.enc.capacity: {}", buf.len(), self.enc.len(), self.enc.capacity());
         // Write all the encrypted messages to the stream
         self.stream.write_all(&self.enc)?;
         // Reset the self.enc buffer
         self.enc.clear();
+        debug!("Written {} bytes", n);
         Ok(n)
     }
 

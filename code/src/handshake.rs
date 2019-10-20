@@ -21,9 +21,7 @@ pub struct SharedSecret {
 }
 
 #[derive(Debug)]
-pub struct HandshakeBase<R, W> {
-    read_stream: R,
-    write_stream: W,
+pub struct HandshakeBase {
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
@@ -32,8 +30,8 @@ pub struct HandshakeBase<R, W> {
 }
 
 #[derive(Debug)]
-pub struct Handshake<R, W, S: State> {
-    pub base: HandshakeBase<R, W>,
+pub struct Handshake<S: State> {
+    pub base: HandshakeBase,
     pub state: S,
 }
 
@@ -114,22 +112,57 @@ fn scalarmult_error_new(fn_name: &str, a: &str, b: &str) -> io::Error {
     ))
 }
 
+// Helper struct to easilly append u8 slices into another slice
+struct Buffer<'a> {
+    buf: &'a mut [u8],
+    n: usize,
+}
+
+macro_rules! concat_into {
+    ( $dst:expr, $( $x:expr ),* ) => {
+        {
+            let mut n = 0;
+            $(
+                $dst[n..n + $x.len()].copy_from_slice($x);
+                n += $x.len();
+            )*
+            $dst
+        }
+    };
+}
+
+macro_rules! concat {
+    ( $( $x:expr ),* ; $n:expr ) => {
+        {
+            let mut dst = [0; $n];
+            concat_into!(dst, $( $x ),*);
+            dst
+        }
+    };
+}
+
+impl<'a> Buffer<'a> {
+    fn new(buf: &'a mut [u8]) -> Self {
+        Buffer{ buf: buf, n: 0 }
+    }
+    fn append(&mut self, src: &[u8]) {
+        self.buf[self.n..src.len()].copy_from_slice(src);
+        self.n += src.len();
+    }
+}
+
 // Client
-impl<R, W> Handshake<R, W, SendClientHello> {
+impl Handshake<SendClientHello> {
     pub fn new_client(
-        read_stream: R,
-        write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> Handshake<R, W, SendClientHello> {
+    ) -> Handshake<SendClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
         let state = SendClientHello;
         let base = HandshakeBase {
-            read_stream,
-            write_stream,
             net_id,
             pk,
             sk,
@@ -140,20 +173,19 @@ impl<R, W> Handshake<R, W, SendClientHello> {
     }
 }
 
-impl<R, W: Write> Handshake<R, W, SendClientHello> {
-    pub fn send_client_hello(mut self) -> Result<Handshake<R, W, RecvServerHello>> {
-        let send = [
+impl Handshake<SendClientHello> {
+    pub fn send_client_hello(mut self, send_buf: &mut [u8]) -> Result<Handshake<RecvServerHello>> {
+        concat_into!(send_buf,
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
-            self.base.ephemeral_pk.as_ref(),
-        ]
-        .concat();
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
+            self.base.ephemeral_pk.as_ref());
         let state = RecvServerHello;
         Ok(Handshake {
             base: self.base,
             state,
         })
+    }
+    pub const fn send_bytes(&self) -> usize {
+        64
     }
 }
 
@@ -177,13 +209,18 @@ impl<R: Read, W> Handshake<R, W, RecvServerHello> {
             },
         })
     }
+    pub fn recv_bytes(&self) -> usize {
+        64
+    }
 }
 
-impl<R, W: Write> Handshake<R, W, SendClientAuth> {
+impl Handshake<SendClientAuth> {
     pub fn send_client_auth(
         mut self,
+        send_buf: &mut [u8],
         server_pk: ed25519::PublicKey,
-    ) -> Result<Handshake<R, W, RecvServerAccept>> {
+    ) -> Result<Handshake<RecvServerAccept>> {
+        let mut buf = Buffer::new(send_buf);
         let fn_error = |a, b| Err(scalarmult_error_new("send_client_auth", a, b));
         let shared_secret = SharedSecret {
             ab: curve25519::scalarmult(&self.base.ephemeral_sk, &self.state.server_ephemeral_pk)
@@ -196,32 +233,27 @@ impl<R, W: Write> Handshake<R, W, SendClientAuth> {
             )
             .or(fn_error("sk", "server_ephemeral_pk"))?,
         };
+
         let sig = ed25519::sign_detached(
-            &[
+            concat!(
                 self.base.net_id.as_ref(),
                 server_pk.as_ref(),
-                sha256::hash(shared_secret.ab.as_ref()).as_ref(),
-            ]
-            .concat(),
-            &self.base.sk,
-        );
-        let send = secretbox::seal(
-            &[sig.as_ref(), self.base.pk.as_ref()].concat(),
+                sha256::hash(shared_secret.ab.as_ref())
+            ; 32 * 3),
+            &self.base.sk);
+
+        let tag = secretbox::seal_detached(
+            concat_into!(send_buf[secretbox::MACBYTES..], sig.as_ref(), self.base.pk.as_ref()),
             &secretbox::Nonce([0; 24]),
-            &secretbox::Key(
-                sha256::hash(
-                    &[
+            &secretbox::Key(sha256::hash(
+                    concat!(
                         self.base.net_id.as_ref(),
                         shared_secret.ab.as_ref(),
-                        shared_secret.aB.as_ref(),
-                    ]
-                    .concat(),
-                )
-                .0,
-            ),
-        );
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
+                        shared_secret.aB.as_ref()
+                    ; 32 * 3
+        )).0));
+        send_buf[..secretbox::MACBYTES].copy_from_slice(tag.as_ref());
+
         Ok(Handshake {
             base: self.base,
             state: RecvServerAccept {
@@ -231,6 +263,9 @@ impl<R, W: Write> Handshake<R, W, SendClientAuth> {
                 sig,
             },
         })
+    }
+    pub fn send_bytes(&self) -> usize {
+        112
     }
 }
 
@@ -281,6 +316,9 @@ impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
                 shared_secret: self.state.shared_secret,
             },
         })
+    }
+    pub fn recv_bytes(&self) -> usize {
+        80
     }
 }
 
@@ -339,6 +377,9 @@ impl<R: Read, W> Handshake<R, W, RecvClientHello> {
             },
         })
     }
+    pub fn recv_bytes(&self) -> usize {
+        64
+    }
 }
 
 impl<R, W: Write> Handshake<R, W, SendServerHello> {
@@ -357,6 +398,9 @@ impl<R, W: Write> Handshake<R, W, SendServerHello> {
                 shared_secret_partial: self.state.shared_secret_partial,
             },
         })
+    }
+    pub fn send_bytes(&self) -> usize {
+        64
     }
 }
 
@@ -413,6 +457,9 @@ impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
             },
         })
     }
+    pub fn recv_bytes(&self) -> usize {
+        112
+    }
 }
 
 impl<R, W: Write> Handshake<R, W, SendServerAccept> {
@@ -453,6 +500,9 @@ impl<R, W: Write> Handshake<R, W, SendServerAccept> {
                 shared_secret: self.state.shared_secret,
             },
         })
+    }
+    pub fn send_bytes(&self) -> usize {
+        80
     }
 }
 
