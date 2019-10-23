@@ -123,8 +123,8 @@ macro_rules! concat_into {
         {
             let mut n = 0;
             $(
-                $dst[n..n + $x.len()].copy_from_slice($x);
                 n += $x.len();
+                $dst[n - $x.len()..n].copy_from_slice($x);
             )*
             $dst
         }
@@ -132,7 +132,7 @@ macro_rules! concat_into {
 }
 
 macro_rules! concat {
-    ( $( $x:expr ),* ; $n:expr ) => {
+    ( $n:expr, $( $x:expr ),* ) => {
         {
             let mut dst = [0; $n];
             concat_into!(dst, $( $x ),*);
@@ -173,6 +173,8 @@ impl Handshake<SendClientHello> {
     }
 }
 
+pub const CLIENT_HELLO_BYTES: usize = 64;
+
 impl Handshake<SendClientHello> {
     pub fn send_client_hello(mut self, send_buf: &mut [u8]) -> Result<Handshake<RecvServerHello>> {
         concat_into!(send_buf,
@@ -184,17 +186,12 @@ impl Handshake<SendClientHello> {
             state,
         })
     }
-    pub const fn send_bytes(&self) -> usize {
-        64
-    }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvServerHello> {
-    pub fn recv_server_hello(mut self) -> Result<Handshake<R, W, SendClientAuth>> {
-        let mut recv = [0; 64];
-        self.base.read_stream.read_exact(&mut recv)?;
-        let server_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
-        let server_ephemeral_pk = curve25519::GroupElement::from_slice(&recv[32..]).unwrap();
+impl Handshake<RecvServerHello> {
+    pub fn recv_server_hello(mut self, recv_buf: &[u8]) -> Result<Handshake<SendClientAuth>> {
+        let server_hmac = auth::Tag::from_slice(&recv_buf[..32]).unwrap();
+        let server_ephemeral_pk = curve25519::GroupElement::from_slice(&recv_buf[32..]).unwrap();
         if !auth::verify(
             &server_hmac,
             server_ephemeral_pk.as_ref(),
@@ -213,6 +210,8 @@ impl<R: Read, W> Handshake<R, W, RecvServerHello> {
         64
     }
 }
+
+pub const CLIENT_AUTH_BYTES: usize = 112;
 
 impl Handshake<SendClientAuth> {
     pub fn send_client_auth(
@@ -235,22 +234,23 @@ impl Handshake<SendClientAuth> {
         };
 
         let sig = ed25519::sign_detached(
-            concat!(
+            &concat!(
+                32 * 3,
                 self.base.net_id.as_ref(),
                 server_pk.as_ref(),
-                sha256::hash(shared_secret.ab.as_ref())
-            ; 32 * 3),
+                sha256::hash(shared_secret.ab.as_ref()).as_ref()
+            ),
             &self.base.sk);
 
         let tag = secretbox::seal_detached(
-            concat_into!(send_buf[secretbox::MACBYTES..], sig.as_ref(), self.base.pk.as_ref()),
+            concat_into!(&mut send_buf[secretbox::MACBYTES..], sig.as_ref(), self.base.pk.as_ref()),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(sha256::hash(
-                    concat!(
+                    &concat!(
+                        32 * 3,
                         self.base.net_id.as_ref(),
                         shared_secret.ab.as_ref(),
                         shared_secret.aB.as_ref()
-                    ; 32 * 3
         )).0));
         send_buf[..secretbox::MACBYTES].copy_from_slice(tag.as_ref());
 
@@ -264,17 +264,12 @@ impl Handshake<SendClientAuth> {
             },
         })
     }
-    pub fn send_bytes(&self) -> usize {
-        112
-    }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
-    pub fn recv_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
-        let mut recv_enc = [0; 80];
-        self.base.read_stream.read_exact(&mut recv_enc)?;
+impl Handshake<RecvServerAccept> {
+    pub fn recv_server_accept(mut self, recv_buf: &[u8]) -> Result<Handshake<Complete>> {
         let recv = secretbox::open(
-            &recv_enc,
+            &recv_buf,
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
@@ -323,21 +318,17 @@ impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
 }
 
 // Server
-impl<R, W> Handshake<R, W, RecvClientHello> {
+impl Handshake<RecvClientHello> {
     pub fn new_server(
-        read_stream: R,
-        write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> Handshake<R, W, RecvClientHello> {
+    ) -> Handshake<RecvClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
         Handshake {
             base: HandshakeBase {
-                read_stream,
-                write_stream,
                 net_id,
                 pk,
                 sk,
@@ -349,12 +340,10 @@ impl<R, W> Handshake<R, W, RecvClientHello> {
     }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvClientHello> {
-    pub fn recv_client_hello(mut self) -> Result<Handshake<R, W, SendServerHello>> {
-        let mut recv = [0; 64];
-        self.base.read_stream.read_exact(&mut recv)?;
-        let client_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
-        let client_ephemeral_pk = curve25519::GroupElement::from_slice(&recv[32..]).unwrap();
+impl Handshake<RecvClientHello> {
+    pub fn recv_client_hello(mut self, recv_buf: &[u8]) -> Result<Handshake<SendServerHello>> {
+        let client_hmac = auth::Tag::from_slice(&recv_buf[..32]).unwrap();
+        let client_ephemeral_pk = curve25519::GroupElement::from_slice(&recv_buf[32..]).unwrap();
         if !auth::verify(
             &client_hmac,
             client_ephemeral_pk.as_ref(),
@@ -382,15 +371,13 @@ impl<R: Read, W> Handshake<R, W, RecvClientHello> {
     }
 }
 
-impl<R, W: Write> Handshake<R, W, SendServerHello> {
-    pub fn send_server_hello(mut self) -> Result<Handshake<R, W, RecvClientAuth>> {
-        let send = [
+pub const SERVER_HELLO_BYTES: usize = 64;
+
+impl Handshake<SendServerHello> {
+    pub fn send_server_hello(mut self, send_buf: &mut [u8]) -> Result<Handshake<RecvClientAuth>> {
+        concat_into!(send_buf,
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
-            self.base.ephemeral_pk.as_ref(),
-        ]
-        .concat();
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
+            self.base.ephemeral_pk.as_ref());
         Ok(Handshake {
             base: self.base,
             state: RecvClientAuth {
@@ -399,17 +386,12 @@ impl<R, W: Write> Handshake<R, W, SendServerHello> {
             },
         })
     }
-    pub fn send_bytes(&self) -> usize {
-        64
-    }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
-    pub fn recv_client_auth(mut self) -> Result<Handshake<R, W, SendServerAccept>> {
-        let mut recv_enc = [0; 112];
-        self.base.read_stream.read_exact(&mut recv_enc)?;
+impl Handshake<RecvClientAuth> {
+    pub fn recv_client_auth(mut self, recv_buf: &[u8]) -> Result<Handshake<SendServerAccept>> {
         let recv = secretbox::open(
-            &recv_enc,
+            &recv_buf,
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
@@ -462,36 +444,39 @@ impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
     }
 }
 
-impl<R, W: Write> Handshake<R, W, SendServerAccept> {
-    pub fn send_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
+pub const SERVER_ACCEPT_BYTES: usize = 80;
+
+impl Handshake<SendServerAccept> {
+    pub fn send_server_accept(mut self, send_buf: &mut [u8]) -> Result<Handshake<Complete>> {
         let sig = ed25519::sign_detached(
-            &[
+            &concat!(
+                32 * 3 + 64,
                 self.base.net_id.as_ref(),
                 self.state.client_sig.as_ref(),
                 self.state.client_pk.as_ref(),
-                sha256::hash(self.state.shared_secret.ab.as_ref()).as_ref(),
-            ]
-            .concat(),
+                sha256::hash(self.state.shared_secret.ab.as_ref()).as_ref()
+            ),
             &self.base.sk,
         );
-        let send = secretbox::seal(
-            sig.as_ref(),
+        send_buf[secretbox::MACBYTES..].copy_from_slice(sig.as_ref());
+        let tag = secretbox::seal_detached(
+            &mut send_buf[secretbox::MACBYTES..],
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
-                    &[
+                    &concat!(
+                        32 * 4,
                         self.base.net_id.as_ref(),
                         self.state.shared_secret.ab.as_ref(),
                         self.state.shared_secret.aB.as_ref(),
-                        self.state.shared_secret.Ab.as_ref(),
-                    ]
-                    .concat(),
+                        self.state.shared_secret.Ab.as_ref()
+                    )
                 )
                 .0,
             ),
         );
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
+        send_buf[..secretbox::MACBYTES].copy_from_slice(tag.as_ref());
+
         Ok(Handshake {
             base: self.base,
             state: Complete {
@@ -501,23 +486,20 @@ impl<R, W: Write> Handshake<R, W, SendServerAccept> {
             },
         })
     }
-    pub fn send_bytes(&self) -> usize {
-        80
-    }
 }
 
-impl<R, W> Handshake<R, W, Complete> {
-    pub fn to_box_stream(self, recv_buf_len: usize) -> BoxStream<R, W> {
-        BoxStream::new(
-            self.base.read_stream,
-            self.base.write_stream,
-            recv_buf_len,
-            self.base.net_id,
-            self.base.pk,
-            self.base.ephemeral_pk,
-            self.state.peer_pk,
-            self.state.peer_ephemeral_pk,
-            self.state.shared_secret,
-        )
-    }
-}
+// impl Handshake<Complete> {
+//     pub fn to_box_stream(self, recv_buf_len: usize) -> BoxStream<R, W> {
+//         BoxStream::new(
+//             self.base.read_stream,
+//             self.base.write_stream,
+//             recv_buf_len,
+//             self.base.net_id,
+//             self.base.pk,
+//             self.base.ephemeral_pk,
+//             self.state.peer_pk,
+//             self.state.peer_ephemeral_pk,
+//             self.state.shared_secret,
+//         )
+//     }
+// }
