@@ -6,7 +6,7 @@ use std::env;
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 
-use code::handshake::{Handshake, SharedSecret, CLIENT_HELLO_BYTES, CLIENT_AUTH_BYTES, SERVER_HELLO_BYTES, SERVER_ACCEPT_BYTES};
+use code::handshake::{handshake_client_sync, handshake_server_sync, SharedSecret};
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -26,73 +26,33 @@ fn print_shared_secret(shared_secret: &SharedSecret) {
 }
 
 fn test_server(
-    mut socket: TcpStream,
+    socket: TcpStream,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_server(net_id, pk, sk);
-    let handshake = {
-        let mut recv_buf = [0; CLIENT_HELLO_BYTES];
-        socket.read_exact(&mut recv_buf)?;
-        handshake.recv_client_hello(&mut recv_buf)?
-    };
-    let handshake = {
-        let mut send_buf = [0; SERVER_HELLO_BYTES];
-        let handshake = handshake.send_server_hello(&mut send_buf)?;
-        socket.write_all(&mut send_buf)?;
-        handshake
-    };
-    let handshake = {
-        let mut recv_buf = [0; CLIENT_AUTH_BYTES];
-        socket.read_exact(&mut recv_buf)?;
-        handshake.recv_client_auth(&mut recv_buf)?
-    };
-    let handshake = {
-        let mut send_buf = [0; SERVER_ACCEPT_BYTES];
-        let handshake = handshake.send_server_accept(&mut send_buf)?;
-        socket.write_all(&mut send_buf)?;
-        handshake
-    };
+    let handshake_complete = handshake_server_sync(
+        socket, net_id, pk, sk
+    )?;
     println!("Handshake complete! 💃");
-    println!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    println!("{:#?}", handshake_complete);
+    print_shared_secret(&handshake_complete.shared_secret);
     Ok(())
 }
 
 fn test_client(
-    mut socket: TcpStream,
+    socket: TcpStream,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_client(net_id, pk, sk);
-    let handshake = {
-        let mut send_buf = [0; CLIENT_HELLO_BYTES];
-        let handshake = handshake.send_client_hello(&mut send_buf)?;
-        socket.write_all(&send_buf)?;
-        handshake
-    };
-    let handshake = {
-        let mut recv_buf = [0; SERVER_HELLO_BYTES];
-        socket.read_exact(&mut recv_buf)?;
-        handshake.recv_server_hello(&recv_buf)?
-    };
-    let handshake = {
-        let mut send_buf = [0; CLIENT_AUTH_BYTES];
-        let handshake = handshake.send_client_auth(&mut send_buf, server_pk)?;
-        socket.write_all(&send_buf)?;
-        handshake
-    };
-    let handshake = {
-        let mut recv_buf = [0; SERVER_ACCEPT_BYTES];
-        socket.read_exact(&mut recv_buf)?;
-        handshake.recv_server_accept(&recv_buf)?
-    };
+    let handshake_complete = handshake_client_sync(
+        socket, net_id, pk, sk, server_pk
+    )?;
     println!("Handshake complete! 💃");
-    println!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    println!("{:#?}", handshake_complete);
+    print_shared_secret(&handshake_complete.shared_secret);
     Ok(())
 }
 
