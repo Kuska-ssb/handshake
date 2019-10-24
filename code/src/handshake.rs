@@ -263,9 +263,11 @@ impl Handshake<SendClientAuth> {
 }
 
 impl Handshake<RecvServerAccept> {
-    pub fn recv_server_accept(self, recv_buf: &[u8]) -> Result<Handshake<Complete>> {
-        let recv = secretbox::open(
-            &recv_buf,
+    pub fn recv_server_accept(self, recv_buf: &mut [u8]) -> Result<Handshake<Complete>> {
+        let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
+        secretbox::open_detached(
+            &mut enc_buf,
+            &secretbox::Tag::from_slice(&tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
@@ -283,7 +285,8 @@ impl Handshake<RecvServerAccept> {
         .or(Err(error_new(
             "secretbox::open failed in recv_server_accept",
         )))?;
-        let sig = ed25519::Signature::from_slice(&recv[..64]).unwrap();
+        let dec_buf = enc_buf;
+        let sig = ed25519::Signature::from_slice(&dec_buf).unwrap();
         if !ed25519::verify_detached(
             &sig,
             &[
@@ -379,9 +382,11 @@ impl Handshake<SendServerHello> {
 }
 
 impl Handshake<RecvClientAuth> {
-    pub fn recv_client_auth(self, recv_buf: &[u8]) -> Result<Handshake<SendServerAccept>> {
-        let recv = secretbox::open(
-            &recv_buf,
+    pub fn recv_client_auth(self, recv_buf: &mut [u8]) -> Result<Handshake<SendServerAccept>> {
+        let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
+        secretbox::open_detached(
+            &mut enc_buf,
+            &secretbox::Tag::from_slice(&tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
@@ -396,8 +401,9 @@ impl Handshake<RecvClientAuth> {
             ),
         )
         .or(Err(error_new("secretbox::open failed in recv_client_auth")))?;
-        let client_sig = ed25519::Signature::from_slice(&recv[..64]).unwrap();
-        let client_pk = ed25519::PublicKey::from_slice(&recv[64..]).unwrap();
+        let dec_buf = enc_buf;
+        let client_sig = ed25519::Signature::from_slice(&dec_buf[..64]).unwrap();
+        let client_pk = ed25519::PublicKey::from_slice(&dec_buf[64..]).unwrap();
         if !ed25519::verify_detached(
             &client_sig,
             &[
@@ -539,7 +545,7 @@ pub fn handshake_client_sync<T: Read + Write> (
     let handshake = {
         let mut recv_buf = [0; SERVER_ACCEPT_BYTES];
         stream.read_exact(&mut recv_buf)?;
-        handshake.recv_server_accept(&recv_buf)?
+        handshake.recv_server_accept(&mut recv_buf)?
     };
     Ok(handshake.complete())
 }
