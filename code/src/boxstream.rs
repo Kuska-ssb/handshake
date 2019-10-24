@@ -1,7 +1,7 @@
 extern crate log;
 extern crate sodiumoxide;
 
-use crate::handshake::SharedSecret;
+use crate::handshake::{SharedSecret, HandshakeComplete};
 use log::debug;
 
 use futures::io::{self}; //, AsyncRead, AsyncWrite};
@@ -150,13 +150,9 @@ impl<R, W> BoxStream<R, W> {
         read_stream: R,
         write_stream: W,
         recv_buf_len: usize,
-        net_id: auth::Key,
-        pk: ed25519::PublicKey,
-        ephemeral_pk: curve25519::GroupElement,
-        peer_pk: ed25519::PublicKey,
-        peer_ephemeral_pk: curve25519::GroupElement,
-        shared_secret: SharedSecret,
+        handshake_complete: HandshakeComplete
     ) -> Self {
+        let HandshakeComplete { net_id, pk, ephemeral_pk, peer_pk, peer_ephemeral_pk, shared_secret } = handshake_complete;
         let shared_secret_0 = sha256::hash(
             &[
                 net_id.as_ref(),
@@ -406,15 +402,20 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
         ));
     }
     debug!("decrypt header buf len: {}", buf.len());
-    let secret_header = &buf[..MSG_HEADER_LEN];
     debug!(
         "decrypt header_nonce: {}",
         hex::encode(key_nonce.nonce.as_ref())
     );
-    match secretbox::open(secret_header, &key_nonce.nonce, &key_nonce.key) {
-        Ok(h) => {
+    let mut header = [0; MSG_HEADER_LEN - secretbox::MACBYTES];
+    header.copy_from_slice(&buf[secretbox::MACBYTES..MSG_HEADER_LEN]);
+    match secretbox::open_detached(
+        &mut header,
+        &secretbox::Tag::from_slice(&buf[..secretbox::MACBYTES]).unwrap(),
+        &key_nonce.nonce,
+        &key_nonce.key) {
+        Ok(()) => {
             key_nonce.nonce.increment_le_inplace();
-            Ok(Header::from_bytes(array_ref![&h, 0, 18]))
+            Ok(Header::from_bytes(array_ref![&header, 0, 18]))
         }
         Err(()) => {
             return Err(io::Error::new(
@@ -437,15 +438,18 @@ fn decrypt_box_stream_body(
             "not enough bytes to read the body",
         ));
     }
-    let secret_body = &[header.body_mac.as_ref(), &buf[..header.body_len]].concat();
     debug!(
         "decrypt body_nonce: {}",
         hex::encode(key_nonce.nonce.as_ref())
     );
-    match secretbox::open(secret_body, &key_nonce.nonce, &key_nonce.key) {
-        Ok(body) => {
+    dec[..header.body_len].copy_from_slice(&buf[..header.body_len]);
+    match secretbox::open_detached(
+        &mut dec[..header.body_len],
+        &secretbox::Tag::from_slice(&header.body_mac).unwrap(),
+        &key_nonce.nonce,
+        &key_nonce.key) {
+        Ok(()) => {
             key_nonce.nonce.increment_le_inplace();
-            dec[..header.body_len].copy_from_slice(&body);
             Ok(header.body_len)
         }
         Err(()) => {
