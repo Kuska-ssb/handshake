@@ -9,6 +9,32 @@ use futures::io::{self}; //, AsyncRead, AsyncWrite};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 use std::{cmp, io::Read, io::Write}; //, pin::Pin};
 
+// TODO: Move this to utils module
+macro_rules! concat_into {
+    ( $dst:expr, $( $x:expr ),* ) => {
+        {
+            let mut n = 0;
+            $(
+                n += $x.len();
+                $dst[n - $x.len()..n].copy_from_slice($x);
+            )*
+            $dst
+        }
+    };
+}
+
+// TODO: Move this to utils module
+macro_rules! concat {
+    ( $n:expr, $( $x:expr ),* ) => {
+        {
+            let mut dst = [0; $n];
+            concat_into!(dst, $( $x ),*);
+            dst
+        }
+    };
+}
+
+
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
 // Length of decrypted header (body_len || enc_body_mac)
@@ -23,24 +49,29 @@ pub struct KeyNonce {
 
 pub struct Header {
     body_len: usize,
-    body_mac: [u8; secretbox::MACBYTES],
+    body_mac: secretbox::Tag,
 }
 
 impl Header {
     pub fn from_bytes(buf: &[u8; MSG_HEADER_DEC_LEN]) -> Self {
         Self {
-            body_len: u16::from_be_bytes(*array_ref![buf[..2], 0, 2]) as usize,
-            body_mac: *array_ref![buf[2..], 0, 16],
+            body_len: u16::from_be_bytes([buf[0], buf[1]]) as usize,
+            body_mac: secretbox::Tag::from_slice(&buf[2..]).unwrap(),
         }
     }
 
+    pub fn from_slice(buf: &[u8]) -> Option<Self> {
+        if buf.len() != MSG_HEADER_DEC_LEN {
+            return None;
+        }
+        Some(Self {
+            body_len: u16::from_be_bytes([buf[0], buf[1]]) as usize,
+            body_mac: secretbox::Tag::from_slice(&buf[2..]).unwrap(),
+        })
+    }
+
     pub fn to_bytes(&self) -> [u8; MSG_HEADER_DEC_LEN] {
-        let buf = [
-            (self.body_len as u16).to_be_bytes().as_ref(),
-            self.body_mac.as_ref(),
-        ]
-        .concat();
-        *array_ref![buf, 0, 18]
+        concat!(18, (self.body_len as u16).to_be_bytes().as_ref(), self.body_mac.as_ref())
     }
 }
 
@@ -154,13 +185,13 @@ impl<R, W> BoxStream<R, W> {
     ) -> Self {
         let HandshakeComplete { net_id, pk, ephemeral_pk, peer_pk, peer_ephemeral_pk, shared_secret } = handshake_complete;
         let shared_secret_0 = sha256::hash(
-            &[
+            &concat!(
+                auth::KEYBYTES + curve25519::GROUPELEMENTBYTES * 3,
                 net_id.as_ref(),
                 shared_secret.ab.as_ref(),
                 shared_secret.aB.as_ref(),
-                shared_secret.Ab.as_ref(),
-            ]
-            .concat(),
+                shared_secret.Ab.as_ref()
+            ),
         );
         let shared_secret_1 = sha256::hash(shared_secret_0.as_ref());
         let send_hmac_nonce = auth::authenticate(peer_ephemeral_pk.as_ref(), &net_id);
@@ -168,12 +199,12 @@ impl<R, W> BoxStream<R, W> {
             key: secretbox::Key(
                 sha256::hash(&[shared_secret_1.as_ref(), peer_pk.as_ref()].concat()).0,
             ),
-            nonce: secretbox::Nonce(*array_ref![send_hmac_nonce.as_ref(), 0, 24]),
+            nonce: secretbox::Nonce::from_slice(&send_hmac_nonce.as_ref()[..secretbox::NONCEBYTES]).unwrap(),
         };
         let recv_hmac_nonce = auth::authenticate(ephemeral_pk.as_ref(), &net_id);
         let recv_key_nonce = KeyNonce {
             key: secretbox::Key(sha256::hash(&[shared_secret_1.as_ref(), pk.as_ref()].concat()).0),
-            nonce: secretbox::Nonce(*array_ref![recv_hmac_nonce.as_ref(), 0, 24]),
+            nonce: secretbox::Nonce::from_slice(&recv_hmac_nonce.as_ref()[..secretbox::NONCEBYTES]).unwrap(),
         };
         let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
         debug!(
@@ -386,7 +417,7 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8
     let secret_body = secretbox::seal(body, &body_nonce, &key_nonce.key);
     let header = Header {
         body_len: body.len(),
-        body_mac: *array_ref![secret_body, 0, secretbox::MACBYTES],
+        body_mac: secretbox::Tag::from_slice(&secret_body[..secretbox::MACBYTES]).unwrap(),
     };
     let secret_header = secretbox::seal(&header.to_bytes(), &header_nonce, &key_nonce.key);
     enc.write(&secret_header).unwrap();
@@ -406,7 +437,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
         "decrypt header_nonce: {}",
         hex::encode(key_nonce.nonce.as_ref())
     );
-    let mut header = [0; MSG_HEADER_LEN - secretbox::MACBYTES];
+    let mut header = [0; MSG_HEADER_DEC_LEN];
     header.copy_from_slice(&buf[secretbox::MACBYTES..MSG_HEADER_LEN]);
     match secretbox::open_detached(
         &mut header,
@@ -415,7 +446,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
         &key_nonce.key) {
         Ok(()) => {
             key_nonce.nonce.increment_le_inplace();
-            Ok(Header::from_bytes(array_ref![&header, 0, 18]))
+            Ok(Header::from_slice(&header).unwrap())
         }
         Err(()) => {
             return Err(io::Error::new(
@@ -445,7 +476,7 @@ fn decrypt_box_stream_body(
     dec[..header.body_len].copy_from_slice(&buf[..header.body_len]);
     match secretbox::open_detached(
         &mut dec[..header.body_len],
-        &secretbox::Tag::from_slice(&header.body_mac).unwrap(),
+        &header.body_mac,
         &key_nonce.nonce,
         &key_nonce.key) {
         Ok(()) => {

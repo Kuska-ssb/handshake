@@ -118,6 +118,7 @@ struct Buffer<'a> {
     n: usize,
 }
 
+// TODO: Move this to utils module
 macro_rules! concat_into {
     ( $dst:expr, $( $x:expr ),* ) => {
         {
@@ -131,6 +132,7 @@ macro_rules! concat_into {
     };
 }
 
+// TODO: Move this to utils module
 macro_rules! concat {
     ( $n:expr, $( $x:expr ),* ) => {
         {
