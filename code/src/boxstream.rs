@@ -75,15 +75,130 @@ impl Header {
     }
 }
 
-pub struct BoxStream<R, W> {
-    reader: BoxStreamRead<R>,
-    writer: BoxStreamWrite<W>,
+
+// Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
+fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8>) -> usize {
+    let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
+
+    let header_nonce = key_nonce.nonce;
+    key_nonce.nonce.increment_le_inplace();
+    let body_nonce = key_nonce.nonce;
+    key_nonce.nonce.increment_le_inplace();
+    debug!(
+        "encrypt header_nonce: {}",
+        hex::encode(header_nonce.as_ref())
+    );
+    debug!("encrypt body_nonce: {}", hex::encode(body_nonce.as_ref()));
+
+    let secret_body = secretbox::seal(body, &body_nonce, &key_nonce.key);
+    let header = Header {
+        body_len: body.len(),
+        body_mac: secretbox::Tag::from_slice(&secret_body[..secretbox::MACBYTES]).unwrap(),
+    };
+    let secret_header = secretbox::seal(&header.to_bytes(), &header_nonce, &key_nonce.key);
+    enc.write(&secret_header).unwrap();
+    enc.write(&secret_body[secretbox::MACBYTES..]).unwrap();
+    return body.len();
 }
 
-impl<R, W> BoxStream<R, W> {
-    pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
-        let BoxStream { reader, writer } = self;
-        (reader, writer)
+fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result<Header> {
+    if buf.len() < MSG_HEADER_LEN {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not enough bytes to read a header",
+        ));
+    }
+    debug!("decrypt header buf len: {}", buf.len());
+    debug!(
+        "decrypt header_nonce: {}",
+        hex::encode(key_nonce.nonce.as_ref())
+    );
+    let mut header = [0; MSG_HEADER_DEC_LEN];
+    header.copy_from_slice(&buf[secretbox::MACBYTES..MSG_HEADER_LEN]);
+    match secretbox::open_detached(
+        &mut header,
+        &secretbox::Tag::from_slice(&buf[..secretbox::MACBYTES]).unwrap(),
+        &key_nonce.nonce,
+        &key_nonce.key) {
+        Ok(()) => {
+            key_nonce.nonce.increment_le_inplace();
+            Ok(Header::from_slice(&header).unwrap())
+        }
+        Err(()) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "secretbox::open for header failed",
+            ));
+        }
+    }
+}
+
+fn decrypt_box_stream_body(
+    header: &Header,
+    key_nonce: &mut KeyNonce,
+    buf: &[u8],
+    dec: &mut [u8],
+) -> io::Result<usize> {
+    if buf.len() < header.body_len {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not enough bytes to read the body",
+        ));
+    }
+    debug!(
+        "decrypt body_nonce: {}",
+        hex::encode(key_nonce.nonce.as_ref())
+    );
+    dec[..header.body_len].copy_from_slice(&buf[..header.body_len]);
+    match secretbox::open_detached(
+        &mut dec[..header.body_len],
+        &header.body_mac,
+        &key_nonce.nonce,
+        &key_nonce.key) {
+        Ok(()) => {
+            key_nonce.nonce.increment_le_inplace();
+            Ok(header.body_len)
+        }
+        Err(()) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "secretbox::open for body failed",
+            ));
+        }
+    }
+}
+
+pub struct BoxStreamWrite<W> {
+    stream: W,
+    key_nonce: KeyNonce,
+    // buf: Vec<u8>,
+    // buf_cap: usize,
+    enc: Vec<u8>,
+    // enc_pos: usize,
+    // enc_cap: usize,
+}
+
+impl<W: Write> Write for BoxStreamWrite<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // Encrypt into as many messages as we can fit in the self.send.enc buffer
+        let mut n = 0;
+        while n < buf.len()
+            && self.enc.len() + MSG_HEADER_LEN + MSG_BODY_MAX_LEN < self.enc.capacity()
+        {
+            n += encrypt_box_stream_msg(&mut self.key_nonce, &buf[n..], &mut self.enc);
+            debug!("Encrypted {} bytes", n);
+        }
+        debug!("buf.len: {}, self.enc.len: {}, self.enc.capacity: {}", buf.len(), self.enc.len(), self.enc.capacity());
+        // Write all the encrypted messages to the stream
+        self.stream.write_all(&self.enc)?;
+        // Reset the self.enc buffer
+        self.enc.clear();
+        debug!("Written {} bytes", n);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
     }
 }
 
@@ -176,6 +291,19 @@ impl<R: Read> Read for BoxStreamRead<R> {
     }
 }
 
+pub struct BoxStream<R, W> {
+    reader: BoxStreamRead<R>,
+    writer: BoxStreamWrite<W>,
+}
+
+impl<R, W> BoxStream<R, W> {
+    pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
+        let BoxStream { reader, writer } = self;
+        (reader, writer)
+    }
+}
+
+
 impl<R, W> BoxStream<R, W> {
     pub fn new(
         read_stream: R,
@@ -248,6 +376,67 @@ impl<R, W> BoxStream<R, W> {
         Self { reader, writer }
     }
 }
+// Not working yet
+// impl<W: AsyncWrite + Unpin> AsyncWrite for BoxStream<W> {
+//     fn poll_write(
+//         mut self: Pin<&mut Self>,
+//         cx: &mut Context<'_>,
+//         buf: &[u8],
+//     ) -> Poll<io::Result<usize>> {
+//         // If we can't buffer any more, flush
+//         if self.send.enc.len() + buf.len() > self.send.enc.capacity() {
+//             match Pin::new(&mut self).poll_flush(cx) {
+//                 Poll::Ready(Err(e)) => {
+//                     return Poll::Ready(Err(e));
+//                 }
+//                 Poll::Pending => {
+//                     return Poll::Pending;
+//                 }
+//                 _ => {}
+//             }
+//         }
+//         let BoxStream { stream, send, .. } = self.get_mut();
+//         // If we don't have enough capacity to buffer, write direclty
+//         // if buf.len() > self.enc.capacity() {
+//         //     // Write directly?
+//         // } else {
+//         //     buffer
+//         // }
+//         let mut buf_pos = 0;
+//         loop {
+//             if buf[buf_pos..].len() < MSG_BODY_MAX_LEN {
+//                 break;
+//             }
+//             buf_pos += encrypt_box_stream_msg(&mut send.key_nonce, &buf[buf_pos..], &mut send.enc);
+//         }
+//         // If send.enc is full, write it to the stream
+//         if send.enc_pos < send.enc_cap {
+//             let poll = Pin::new(stream).poll_write(cx, &send.enc[send.enc_pos..send.enc_cap]);
+//             match poll {
+//                 Poll::Ready(Ok(n)) => {
+//                     send.enc_pos += n;
+//                 }
+//                 Poll::Ready(Err(e)) => {
+//                     return Poll::Ready(Err(e));
+//                 }
+//                 Poll::Pending => {
+//                     return Poll::Pending;
+//                 }
+//             }
+//         }
+//         Poll::Pending
+//     }
+//
+//     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+//         let BoxStream { stream, .. } = self.get_mut();
+//         Pin::new(stream).poll_flush(cx)
+//     }
+//
+//     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+//         let BoxStream { stream, .. } = self.get_mut();
+//         Pin::new(stream).poll_close(cx)
+//     }
+// }
 
 // Decrypt BoxStream messages from recv.buf into recv.dec.  Return the position of the first
 // non-decrypted byte in recv.buf.
@@ -363,193 +552,5 @@ impl<R, W> BoxStream<R, W> {
 //             return Poll::Ready(Ok(len));
 //         }
 //         return Poll::Pending;
-//     }
-// }
-
-pub struct BoxStreamWrite<W> {
-    stream: W,
-    key_nonce: KeyNonce,
-    // buf: Vec<u8>,
-    // buf_cap: usize,
-    enc: Vec<u8>,
-    // enc_pos: usize,
-    // enc_cap: usize,
-}
-
-impl<W: Write> Write for BoxStreamWrite<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // Encrypt into as many messages as we can fit in the self.send.enc buffer
-        let mut n = 0;
-        while n < buf.len()
-            && self.enc.len() + MSG_HEADER_LEN + MSG_BODY_MAX_LEN < self.enc.capacity()
-        {
-            n += encrypt_box_stream_msg(&mut self.key_nonce, &buf[n..], &mut self.enc);
-            debug!("Encrypted {} bytes", n);
-        }
-        debug!("buf.len: {}, self.enc.len: {}, self.enc.capacity: {}", buf.len(), self.enc.len(), self.enc.capacity());
-        // Write all the encrypted messages to the stream
-        self.stream.write_all(&self.enc)?;
-        // Reset the self.enc buffer
-        self.enc.clear();
-        debug!("Written {} bytes", n);
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.stream.flush()
-    }
-}
-
-// Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
-fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8>) -> usize {
-    let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
-
-    let header_nonce = key_nonce.nonce;
-    key_nonce.nonce.increment_le_inplace();
-    let body_nonce = key_nonce.nonce;
-    key_nonce.nonce.increment_le_inplace();
-    debug!(
-        "encrypt header_nonce: {}",
-        hex::encode(header_nonce.as_ref())
-    );
-    debug!("encrypt body_nonce: {}", hex::encode(body_nonce.as_ref()));
-
-    let secret_body = secretbox::seal(body, &body_nonce, &key_nonce.key);
-    let header = Header {
-        body_len: body.len(),
-        body_mac: secretbox::Tag::from_slice(&secret_body[..secretbox::MACBYTES]).unwrap(),
-    };
-    let secret_header = secretbox::seal(&header.to_bytes(), &header_nonce, &key_nonce.key);
-    enc.write(&secret_header).unwrap();
-    enc.write(&secret_body[secretbox::MACBYTES..]).unwrap();
-    return body.len();
-}
-
-fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result<Header> {
-    if buf.len() < MSG_HEADER_LEN {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "not enough bytes to read a header",
-        ));
-    }
-    debug!("decrypt header buf len: {}", buf.len());
-    debug!(
-        "decrypt header_nonce: {}",
-        hex::encode(key_nonce.nonce.as_ref())
-    );
-    let mut header = [0; MSG_HEADER_DEC_LEN];
-    header.copy_from_slice(&buf[secretbox::MACBYTES..MSG_HEADER_LEN]);
-    match secretbox::open_detached(
-        &mut header,
-        &secretbox::Tag::from_slice(&buf[..secretbox::MACBYTES]).unwrap(),
-        &key_nonce.nonce,
-        &key_nonce.key) {
-        Ok(()) => {
-            key_nonce.nonce.increment_le_inplace();
-            Ok(Header::from_slice(&header).unwrap())
-        }
-        Err(()) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "secretbox::open for header failed",
-            ));
-        }
-    }
-}
-
-fn decrypt_box_stream_body(
-    header: &Header,
-    key_nonce: &mut KeyNonce,
-    buf: &[u8],
-    dec: &mut [u8],
-) -> io::Result<usize> {
-    if buf.len() < header.body_len {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "not enough bytes to read the body",
-        ));
-    }
-    debug!(
-        "decrypt body_nonce: {}",
-        hex::encode(key_nonce.nonce.as_ref())
-    );
-    dec[..header.body_len].copy_from_slice(&buf[..header.body_len]);
-    match secretbox::open_detached(
-        &mut dec[..header.body_len],
-        &header.body_mac,
-        &key_nonce.nonce,
-        &key_nonce.key) {
-        Ok(()) => {
-            key_nonce.nonce.increment_le_inplace();
-            Ok(header.body_len)
-        }
-        Err(()) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "secretbox::open for body failed",
-            ));
-        }
-    }
-}
-
-// Not working yet
-// impl<W: AsyncWrite + Unpin> AsyncWrite for BoxStream<W> {
-//     fn poll_write(
-//         mut self: Pin<&mut Self>,
-//         cx: &mut Context<'_>,
-//         buf: &[u8],
-//     ) -> Poll<io::Result<usize>> {
-//         // If we can't buffer any more, flush
-//         if self.send.enc.len() + buf.len() > self.send.enc.capacity() {
-//             match Pin::new(&mut self).poll_flush(cx) {
-//                 Poll::Ready(Err(e)) => {
-//                     return Poll::Ready(Err(e));
-//                 }
-//                 Poll::Pending => {
-//                     return Poll::Pending;
-//                 }
-//                 _ => {}
-//             }
-//         }
-//         let BoxStream { stream, send, .. } = self.get_mut();
-//         // If we don't have enough capacity to buffer, write direclty
-//         // if buf.len() > self.enc.capacity() {
-//         //     // Write directly?
-//         // } else {
-//         //     buffer
-//         // }
-//         let mut buf_pos = 0;
-//         loop {
-//             if buf[buf_pos..].len() < MSG_BODY_MAX_LEN {
-//                 break;
-//             }
-//             buf_pos += encrypt_box_stream_msg(&mut send.key_nonce, &buf[buf_pos..], &mut send.enc);
-//         }
-//         // If send.enc is full, write it to the stream
-//         if send.enc_pos < send.enc_cap {
-//             let poll = Pin::new(stream).poll_write(cx, &send.enc[send.enc_pos..send.enc_cap]);
-//             match poll {
-//                 Poll::Ready(Ok(n)) => {
-//                     send.enc_pos += n;
-//                 }
-//                 Poll::Ready(Err(e)) => {
-//                     return Poll::Ready(Err(e));
-//                 }
-//                 Poll::Pending => {
-//                     return Poll::Pending;
-//                 }
-//             }
-//         }
-//         Poll::Pending
-//     }
-//
-//     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-//         let BoxStream { stream, .. } = self.get_mut();
-//         Pin::new(stream).poll_flush(cx)
-//     }
-//
-//     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-//         let BoxStream { stream, .. } = self.get_mut();
-//         Pin::new(stream).poll_close(cx)
 //     }
 // }
