@@ -1,39 +1,13 @@
 extern crate log;
 extern crate sodiumoxide;
 
-use crate::handshake::{SharedSecret, HandshakeComplete};
+use crate::handshake::{HandshakeComplete, SharedSecret};
 use log::debug;
 
 use futures::io::{self}; //, AsyncRead, AsyncWrite};
                          // use futures::task::{Context, Poll};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 use std::{cmp, io::Read, io::Write}; //, pin::Pin};
-
-// TODO: Move this to utils module
-macro_rules! concat_into {
-    ( $dst:expr, $( $x:expr ),* ) => {
-        {
-            let mut n = 0;
-            $(
-                n += $x.len();
-                $dst[n - $x.len()..n].copy_from_slice($x);
-            )*
-            $dst
-        }
-    };
-}
-
-// TODO: Move this to utils module
-macro_rules! concat {
-    ( $n:expr, $( $x:expr ),* ) => {
-        {
-            let mut dst = [0; $n];
-            concat_into!(dst, $( $x ),*);
-            dst
-        }
-    };
-}
-
 
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
@@ -71,10 +45,13 @@ impl Header {
     }
 
     pub fn to_bytes(&self) -> [u8; MSG_HEADER_DEC_LEN] {
-        concat!(18, (self.body_len as u16).to_be_bytes().as_ref(), self.body_mac.as_ref())
+        concat!(
+            18,
+            (self.body_len as u16).to_be_bytes().as_ref(),
+            self.body_mac.as_ref()
+        )
     }
 }
-
 
 // Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
 fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8>) -> usize {
@@ -119,7 +96,8 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
         &mut header,
         &secretbox::Tag::from_slice(&buf[..secretbox::MACBYTES]).unwrap(),
         &key_nonce.nonce,
-        &key_nonce.key) {
+        &key_nonce.key,
+    ) {
         Ok(()) => {
             key_nonce.nonce.increment_le_inplace();
             Ok(Header::from_slice(&header).unwrap())
@@ -154,7 +132,8 @@ fn decrypt_box_stream_body(
         &mut dec[..header.body_len],
         &header.body_mac,
         &key_nonce.nonce,
-        &key_nonce.key) {
+        &key_nonce.key,
+    ) {
         Ok(()) => {
             key_nonce.nonce.increment_le_inplace();
             Ok(header.body_len)
@@ -188,7 +167,12 @@ impl<W: Write> Write for BoxStreamWrite<W> {
             n += encrypt_box_stream_msg(&mut self.key_nonce, &buf[n..], &mut self.enc);
             debug!("Encrypted {} bytes", n);
         }
-        debug!("buf.len: {}, self.enc.len: {}, self.enc.capacity: {}", buf.len(), self.enc.len(), self.enc.capacity());
+        debug!(
+            "buf.len: {}, self.enc.len: {}, self.enc.capacity: {}",
+            buf.len(),
+            self.enc.len(),
+            self.enc.capacity()
+        );
         // Write all the encrypted messages to the stream
         self.stream.write_all(&self.enc)?;
         // Reset the self.enc buffer
@@ -303,36 +287,42 @@ impl<R, W> BoxStream<R, W> {
     }
 }
 
-
 impl<R, W> BoxStream<R, W> {
     pub fn new(
         read_stream: R,
         write_stream: W,
         recv_buf_len: usize,
-        handshake_complete: HandshakeComplete
+        handshake_complete: HandshakeComplete,
     ) -> Self {
-        let HandshakeComplete { net_id, pk, ephemeral_pk, peer_pk, peer_ephemeral_pk, shared_secret } = handshake_complete;
-        let shared_secret_0 = sha256::hash(
-            &concat!(
-                auth::KEYBYTES + curve25519::GROUPELEMENTBYTES * 3,
-                net_id.as_ref(),
-                shared_secret.ab.as_ref(),
-                shared_secret.aB.as_ref(),
-                shared_secret.Ab.as_ref()
-            ),
-        );
+        let HandshakeComplete {
+            net_id,
+            pk,
+            ephemeral_pk,
+            peer_pk,
+            peer_ephemeral_pk,
+            shared_secret,
+        } = handshake_complete;
+        let shared_secret_0 = sha256::hash(&concat!(
+            auth::KEYBYTES + curve25519::GROUPELEMENTBYTES * 3,
+            net_id.as_ref(),
+            shared_secret.ab.as_ref(),
+            shared_secret.aB.as_ref(),
+            shared_secret.Ab.as_ref()
+        ));
         let shared_secret_1 = sha256::hash(shared_secret_0.as_ref());
         let send_hmac_nonce = auth::authenticate(peer_ephemeral_pk.as_ref(), &net_id);
         let send_key_nonce = KeyNonce {
             key: secretbox::Key(
                 sha256::hash(&[shared_secret_1.as_ref(), peer_pk.as_ref()].concat()).0,
             ),
-            nonce: secretbox::Nonce::from_slice(&send_hmac_nonce.as_ref()[..secretbox::NONCEBYTES]).unwrap(),
+            nonce: secretbox::Nonce::from_slice(&send_hmac_nonce.as_ref()[..secretbox::NONCEBYTES])
+                .unwrap(),
         };
         let recv_hmac_nonce = auth::authenticate(ephemeral_pk.as_ref(), &net_id);
         let recv_key_nonce = KeyNonce {
             key: secretbox::Key(sha256::hash(&[shared_secret_1.as_ref(), pk.as_ref()].concat()).0),
-            nonce: secretbox::Nonce::from_slice(&recv_hmac_nonce.as_ref()[..secretbox::NONCEBYTES]).unwrap(),
+            nonce: secretbox::Nonce::from_slice(&recv_hmac_nonce.as_ref()[..secretbox::NONCEBYTES])
+                .unwrap(),
         };
         let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
         debug!(
