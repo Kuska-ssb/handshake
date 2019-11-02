@@ -8,7 +8,7 @@ use log::debug;
 use futures::io::{self}; //, AsyncRead, AsyncWrite};
                          // use futures::task::{Context, Poll};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
-use std::{cmp, io::Read, io::Write}; //, pin::Pin};
+use std::{cmp, io::Read, io::Result, io::Write}; //, pin::Pin};
 
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
@@ -54,7 +54,8 @@ impl Header {
     }
 }
 
-// Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
+// Encrypt a single message from buf into enc, return the number (n) of bytes from buf that were
+// encryted.  The encrypted bytes written into enc will be n + MSG_HEADER_LEN.
 fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) -> usize {
     let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
 
@@ -85,6 +86,7 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) 
     return body.len();
 }
 
+// Reads MSG_HEADER_LEN bytes from buf to decrypt a header.
 fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> io::Result<Header> {
     if buf.len() < MSG_HEADER_LEN {
         return Err(io::Error::new(
@@ -120,6 +122,8 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> io::Re
     }
 }
 
+// Decrypts the body corresponding to the header.  The decrypted body will be written into buf.
+// Returns the number of decrypted bytes (body lenght).
 fn decrypt_box_stream_body(
     header: &Header,
     key_nonce: &mut KeyNonce,
@@ -158,16 +162,11 @@ fn decrypt_box_stream_body(
 pub struct BoxStreamWrite<'a, W> {
     stream: W,
     key_nonce: KeyNonce,
-    // buf: Vec<u8>,
-    // buf_cap: usize,
     enc: &'a mut [u8],
-    // enc_pos: usize,
-    // enc_cap: usize,
 }
 
 impl<'a, W: Write> Write for BoxStreamWrite<'a, W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // let enc_buf = Buffer::new(&mut self.enc);
         // Encrypt into as many messages as we can fit in the self.send.enc buffer
         let mut buf_n = 0;
         let mut enc_n = 0;
@@ -186,8 +185,6 @@ impl<'a, W: Write> Write for BoxStreamWrite<'a, W> {
         );
         // Write all the encrypted messages to the stream
         self.stream.write_all(&self.enc[..enc_n])?;
-        // Reset the self.enc buffer
-        // self.enc.clear();
         debug!("Written {} bytes", buf_n);
         Ok(buf_n)
     }
@@ -306,7 +303,7 @@ impl<'a, 'b, R, W> BoxStream<'a, 'b, R, W> {
         read_buf: &'a mut [u8],
         write_buf: &'b mut [u8],
         handshake_complete: HandshakeComplete,
-    ) -> Self {
+    ) -> Result<Self> {
         let HandshakeComplete {
             net_id,
             pk,
@@ -337,7 +334,15 @@ impl<'a, 'b, R, W> BoxStream<'a, 'b, R, W> {
             nonce: secretbox::Nonce::from_slice(&recv_hmac_nonce.as_ref()[..secretbox::NONCEBYTES])
                 .unwrap(),
         };
-        // let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
+        if read_buf.len() < MSG_HEADER_LEN + MSG_BODY_MAX_LEN
+            || write_buf.len() < MSG_HEADER_LEN + MSG_BODY_MAX_LEN
+        {
+            // MSG_HEADER_LEN + MSG_BODY_MAX_LEN == 34 + 4096 == 4130
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "read_buf and write_buf must be at least 4130 bytes",
+            ));
+        }
         debug!(
             "recv_key_nonce.key {}",
             hex::encode(recv_key_nonce.key.as_ref())
@@ -378,7 +383,7 @@ impl<'a, 'b, R, W> BoxStream<'a, 'b, R, W> {
             // enc_pos: 0,
             // enc_cap: 0,
         };
-        Self { reader, writer }
+        Ok(Self { reader, writer })
     }
 }
 

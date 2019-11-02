@@ -43,6 +43,7 @@ fn test_server(
     let (read_buf, write_buf) = (&mut [0; 0x8000], &mut [0; 0x8000]);
     let (mut box_stream_read, mut box_stream_write) =
         BoxStream::new(&socket, &socket, read_buf, write_buf, handshake_complete)
+            .unwrap()
             .split_read_write();
 
     thread::scope(|s| {
@@ -76,6 +77,7 @@ fn test_client(
     let (read_buf, write_buf) = (&mut [0; 0x8000], &mut [0; 0x8000]);
     let (mut box_stream_read, mut box_stream_write) =
         BoxStream::new(&socket, &socket, read_buf, write_buf, handshake_complete)
+            .unwrap()
             .split_read_write();
 
     thread::scope(|s| {
