@@ -9,8 +9,8 @@ use std::env;
 use std::io::{self};
 use std::net::{TcpListener, TcpStream};
 
-use code::handshake::{Handshake, SharedSecret, handshake_client_sync, handshake_server_sync};
 use code::boxstream::BoxStream;
+use code::handshake::{handshake_client_sync, handshake_server_sync, Handshake, SharedSecret};
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -35,15 +35,15 @@ fn test_server(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
 ) -> io::Result<()> {
-    let handshake_complete = handshake_server_sync(
-        &socket, net_id, pk, sk
-    )?;
+    let handshake_complete = handshake_server_sync(&socket, net_id, pk, sk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake_complete);
     print_shared_secret(&handshake_complete.shared_secret);
 
+    let (read_buf, write_buf) = (&mut [0; 0x8000], &mut [0; 0x8000]);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, 0x8000, handshake_complete).split_read_write();
+        BoxStream::new(&socket, &socket, read_buf, write_buf, handshake_complete)
+            .split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
@@ -68,16 +68,15 @@ fn test_client(
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
 ) -> io::Result<()> {
-    let handshake_complete = handshake_client_sync(
-        &socket, net_id, pk, sk, server_pk
-    )?;
+    let handshake_complete = handshake_client_sync(&socket, net_id, pk, sk, server_pk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake_complete);
     print_shared_secret(&handshake_complete.shared_secret);
 
+    let (read_buf, write_buf) = (&mut [0; 0x8000], &mut [0; 0x8000]);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, 0x8000, handshake_complete)
-        .split_read_write();
+        BoxStream::new(&socket, &socket, read_buf, write_buf, handshake_complete)
+            .split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
