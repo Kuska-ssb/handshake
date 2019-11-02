@@ -7,7 +7,7 @@ use log::debug;
 
 use futures::io::{self}; //, AsyncRead, AsyncWrite};
                          // use futures::task::{Context, Poll};
-use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
+use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
 use std::{cmp, io::Read, io::Write}; //, pin::Pin};
 
 // Length of encrypted body (with MAC detached)
@@ -381,6 +381,15 @@ impl<'a, 'b, R, W> BoxStream<'a, 'b, R, W> {
         Self { reader, writer }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_boxstream() {}
+}
+
 // Not working yet
 // impl<W: AsyncWrite + Unpin> AsyncWrite for BoxStream<W> {
 //     fn poll_write(
