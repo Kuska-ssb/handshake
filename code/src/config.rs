@@ -2,9 +2,11 @@ use sodiumoxide::crypto::sign::ed25519;
 use std::io;
 use base64;
 use std::string::ToString;
+use sodiumoxide::crypto::auth;
 
 const CURVE_ED25519 : &str = "ed25519";
 const CURVE_ED25519_SUFFIX : &str = ".ed25519";
+const SSB_NET_ID : &str = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
 
 #[derive(Debug)]
 pub struct IdentitySecret {
@@ -19,6 +21,10 @@ struct JsonSSBSecret {
     curve: String,
     public: String,
     private: String,
+}
+
+pub fn ssb_net_id() -> auth::Key {
+    auth::Key::from_slice(&hex::decode(SSB_NET_ID).unwrap()).unwrap()
 }
 
 fn to_ioerr<T: ToString>(err: T) -> io::Error {
@@ -51,6 +57,19 @@ fn to_ed25519_sk(s : &str) -> io::Result<ed25519::SecretKey> {
 }
 
 impl IdentitySecret {
+
+    pub fn from_local_config() -> io::Result<IdentitySecret> {
+        if let Some(home_dir) = dirs::home_dir() {
+            let local_key_file = format!("{}/.ssb/secret",home_dir.to_string_lossy());
+
+            std::fs::read_to_string(local_key_file)
+                .and_then(IdentitySecret::from_config)
+
+        } else {
+            Err(to_ioerr("cannot retrieve home folder"))
+        }
+    }
+
     pub fn from_config<T : AsRef<str>>(config: T) -> io::Result<IdentitySecret> {
 
         // strip all comments
