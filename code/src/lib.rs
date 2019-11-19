@@ -11,4 +11,5 @@ pub mod boxstream;
 pub mod handshake;
 pub mod config;
 pub mod rpc;
+pub mod buffer;
 

@@ -1,5 +1,5 @@
 use std::io;
-use std::io::Write;
+use std::io::{Read,Write};
 use crate::boxstream::{BoxStreamRead,BoxStreamWrite};
 
 const RPC_HEADER_STREAM_FLAG : u8 = 1 << 3;
@@ -151,9 +151,19 @@ impl<R:io::Read , W:io::Write> Client<R,W> {
     
     pub fn recv(&mut self) -> Result<(Header,Vec<u8>),io::Error> {
 
-        let rpc_header_raw = self.box_reader.read_body()?;
+        let mut rpc_header_raw = [0u8;9];
+
+        while self.box_reader.read(&mut rpc_header_raw[..])? < rpc_header_raw.len() {
+            println!("reading more rpc header");
+        }
         let rpc_header = Header::from_slice(&rpc_header_raw[..])?;
-        let rpc_body = self.box_reader.read_body()?;
+
+        let mut rpc_body : Vec<u8> = Vec::with_capacity(rpc_header.body_len as usize);
+        rpc_body.resize(rpc_body.capacity(), 0);
+
+        while self.box_reader.read(&mut rpc_body[..])? < rpc_body.capacity() {
+            println!("reading more rpc body");
+        }
 
         Ok((rpc_header,rpc_body))
     }
