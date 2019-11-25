@@ -110,7 +110,7 @@ impl CircularBuffer {
 
 impl Read for CircularBuffer {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if buf.len()==0 || self.buffer.len() == 0 {
+        if buf.len()==0 || self.len == 0 {
             Ok(0)
         } else {
             debug!("circularbuffer_read {}",buf.len());
@@ -118,7 +118,11 @@ impl Read for CircularBuffer {
             let last_len = self.len;
 
             // read from the %start to the %end or end of buffer
-            let len_a = cmp::min(buf.len(),cmp::max(self.buffer.len(),self.end)-self.start);
+            let len_a = cmp::min(buf.len(), if self.start < self.end {
+                self.end - self.start
+            } else {
+                self.buffer.len() - self.start
+            });
             buf[..len_a].copy_from_slice(&self.buffer[self.start..self.start+len_a]);
             self.start = (self.start + len_a) % self.buffer.len();
             self.len -= len_a;
@@ -316,6 +320,21 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn check_fuzzing() -> io::Result<()> {
+        let mut r = [0u8;7];
+        let mut b = super::CircularBuffer::new(7);
+        for i in 0..10000 {            
+            let n1 = (i) % b.cap();
+            let n2 = (2*i) % b.cap();
+            let n3 = (3*i) % b.cap();
+            b.skip(n1);
+            b.write(&r[..n2])?;
+            b.read(&mut r[..n3])?;
+            b.write(&r[..n2])?;
+        }
+        Ok(())
+    }
 }
 
 
