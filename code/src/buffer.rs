@@ -113,7 +113,7 @@ impl Read for CircularBuffer {
         if buf.len()==0 || self.len == 0 {
             Ok(0)
         } else {
-            debug!("circularbuffer_read {}",buf.len());
+            debug!("  cbuffer_read {}",buf.len());
 
             let last_len = self.len;
 
@@ -142,7 +142,7 @@ impl Read for CircularBuffer {
 
 impl async_std::io::Read for CircularBuffer {
     fn poll_read( self: Pin<&mut Self>, _cx: &mut Context, buf : &mut [u8] ) -> Poll<async_std::io::Result<usize>> {
-        debug!("circularbuffer_poll_read {}",buf.len());
+        debug!("  cbuffer_poll_read {}",buf.len());
         Poll::Ready(self.get_mut().read(buf))
     }
 }
@@ -187,6 +187,7 @@ impl Write for CircularBuffer {
                 self.len += len;
             }
 
+            debug!("    cbuffer_write requested {} writtern {}",buf.len(), self.len - last_len);
             Ok(self.len - last_len)
         }
     }
@@ -323,12 +324,13 @@ mod test {
     #[test]
     fn check_fuzzing() -> io::Result<()> {
         let mut r = [0u8;7];
-        let mut b = super::CircularBuffer::new(7);
+        let mut b = super::CircularBuffer::new(r.len());
         for i in 0..10000 {            
             let n1 = (i) % b.cap();
             let n2 = (2*i) % b.cap();
             let n3 = (3*i) % b.cap();
             b.skip(n1);
+            b.defrag();
             b.write(&r[..n2])?;
             b.read(&mut r[..n3])?;
             b.write(&r[..n2])?;

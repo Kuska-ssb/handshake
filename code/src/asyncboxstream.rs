@@ -128,6 +128,8 @@ where
 {
     fn poll_read( self: Pin<&mut Self>, cx:&mut Context,buf :&mut [u8] ) -> Poll<Result<usize>> {
 
+        debug!("poll_read {}",buf.len());
+
         let BoxStreamRead {
             stream, key_nonce, enc, status, dec, read_limit, enc_cap, dec_off, dec_len, ..
         } = self.get_mut();
@@ -152,6 +154,7 @@ where
             
             match status {
                 RecvStatus::ExpectHeader => {
+                    debug!("  poll_read expect_header");
                     let header = decrypt_box_stream_header(
                         key_nonce,
                         &mut enc[..*enc_cap],
@@ -160,17 +163,19 @@ where
                         return Poll::Ready(Err(Error::new(ErrorKind::Other, "internal buffer too small")));
                     }
                     *read_limit = MSG_HEADER_LEN + header.body_len;
-                    debug!("boxstream_reader_body_len={}",header.body_len);
+                    debug!("  poll_read header_complete body_len={}",header.body_len);
                     *status = RecvStatus::ExpectBody(header);
                     return Poll::Pending;
                 }
                 RecvStatus::ExpectBody(ref header) => {
+                    debug!("  poll_read expect_body");
                     *dec_len = decrypt_box_stream_body(
                         header,
                         key_nonce,
                         &mut enc[MSG_HEADER_LEN..*read_limit],
                         &mut dec[..header.body_len],
                     )?;
+                    debug!("  poll_read decipher_complete body_len={}",header.body_len);
                     *dec_off = 0;
                 }
             }
@@ -178,8 +183,21 @@ where
 
         // read from dectext buffer
         let len = cmp::min(*dec_len-*dec_off,buf.len());
-        buf[..len].copy_from_slice(&dec[*dec_off..len]);
+        buf[..len].copy_from_slice(&dec[*dec_off..*dec_off+len]);
         *dec_off += len;
+
+        debug!("  poll_read reading_deciphered_buffer req {} got {}",buf.len(),len);
+        debug!("    dec_off={} dec_len={}",dec_off, dec_len);
+
+        if dec_off == dec_len  {
+            *status = RecvStatus::ExpectHeader;
+            *read_limit = MSG_HEADER_LEN;
+            *dec_off = 0;
+            *dec_len = 0;
+            *enc_cap = 0;
+            debug!("    *reset");
+        }
+
         Poll::Ready(Ok(len))
     }
 }
@@ -251,7 +269,7 @@ where
             stream: stream,
             key_nonce: key_nonce,
             enc: CircularBuffer::new(capacity),
-            dec: vec![0; capacity].into_boxed_slice(),
+            dec: vec![0; MSG_BODY_MAX_LEN].into_boxed_slice(),
             dec_len : 0,
         }
     }
@@ -268,6 +286,8 @@ where
         buf: &[u8]
     ) -> Poll<Result<usize>> {
 
+        debug!("poll_write buf_len={}",buf.len());
+
         // Encrypt into as many messages as we can fit in the self.send.enc buffer
         let BoxStreamWrite { dec_len, dec, enc, key_nonce, stream, .. }
         = self.get_mut();
@@ -276,61 +296,70 @@ where
 
         if *dec_len < MSG_BODY_MAX_LEN {
             // there's enough space in plaintext buffer
-            consumed_bytes = cmp::min(MSG_BODY_MAX_LEN-dec.len(),buf.len());
+            consumed_bytes = cmp::min(MSG_BODY_MAX_LEN-*dec_len,buf.len());
             &dec[*dec_len..*dec_len+consumed_bytes].copy_from_slice(&buf[..consumed_bytes]);
             *dec_len += consumed_bytes;
-            debug!("buffer_write dec_write {}",consumed_bytes);
+            debug!("  buffer_write dec_write {} (buf_len={})",consumed_bytes,buf.len());
         }
 
         if *dec_len == MSG_BODY_MAX_LEN {
-            debug!("buffer_write full packet");
+            debug!("  buffer_write full packet");
             // there's a full packet to cipher
             if enc.cap()-enc.len() >= MSG_HEADER_LEN + MSG_BODY_MAX_LEN {
                 // and also there's enough space in to store a new ciphered packet
                 let mut tmp_enc = Vec::with_capacity(MSG_HEADER_LEN + MSG_BODY_MAX_LEN);    
-                encrypt_box_stream_msg(key_nonce, &dec[0..*dec_len], &mut tmp_enc);
+                encrypt_box_stream_msg(key_nonce, &dec[0..MSG_BODY_MAX_LEN], &mut tmp_enc);
                 match enc.write_from(&mut &tmp_enc[..]) {
                     Err(err) => return Poll::Ready(Err(err)),
                     _ => ()
                 };
-                debug!("buffer_write enc_write tmp_buf_len {}", tmp_enc.len());
-                debug!("buffer_write enc_write enc_len {}", enc.len());
+                *dec_len = 0;
+                debug!("  buffer_write enc_write tmp_buf_len {}", tmp_enc.len());
+                debug!("  buffer_write enc_write enc_len {}", enc.len());
             }
         }
 
-        let poll = Pin::new(stream).poll_write(cx,enc.contiguous_value());
-        match poll {
-            Poll::Ready(Ok(n)) => {
-                debug!("buffer_write stream_write {}",n);
-                enc.skip(n);
-                Poll::Ready(Ok(consumed_bytes))
-            },
-            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
-            Poll::Pending => Poll::Pending,
-        }
+        debug!("  buffer_write consumed_bytes={}",consumed_bytes);
 
+        if enc.len() > 0 {
+            let poll = Pin::new(stream).poll_write(cx,enc.contiguous_value());
+            match poll {
+                Poll::Ready(Ok(n)) => {
+                    debug!("  buffer_write stream_write {} (contiguous is {})",n, enc.contiguous_value().len());
+                    enc.skip(n);
+                    Poll::Ready(Ok(consumed_bytes))
+                },
+                Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+                Poll::Pending => Poll::Pending,
+            }
+        } else {
+            Poll::Ready(Ok(consumed_bytes))
+        }
     }
 
     // Attempt to flush the object, ensuring that any buffered data reach their destination.
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        
+
+        debug!("poll_flush");
+
         let BoxStreamWrite { stream, enc, key_nonce, dec, dec_len, .. } = self.get_mut();
 
         if *dec_len > 0 {
             // cipher pending data
-            debug!("buffer_flush dec_len {}",*dec_len);
+            debug!("  buffer_flush dec_len {}",*dec_len);
             let mut tmp_enc = Vec::with_capacity(MSG_HEADER_LEN + *dec_len);    
             encrypt_box_stream_msg(key_nonce, &dec[0..*dec_len], &mut tmp_enc);
             match enc.write_from(&mut &tmp_enc[..]) {
                 Err(err) => return Poll::Ready(Err(err)),
                 _ => ()
             };
-            debug!("buffer_flush enc_write tmp_buf_len {}", tmp_enc.len());
-            debug!("buffer_flush enc_write enc_len {}", enc.len());
+            debug!("  buffer_flush enc_write tmp_buf_len {}", tmp_enc.len());
+            debug!("  buffer_flush enc_write enc_len {}", enc.len());
+            *dec_len = 0;
         }
 
         enc.defrag();
-        debug!("buffer_flush stream_write_contiguous {}", enc.len());
+        debug!("  buffer_flush stream_write_contiguous {}", enc.len());
         let poll = Pin::new(stream).poll_write(cx,enc.contiguous_value());
         match poll {
             Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),  // what here if there's not enough??
@@ -436,17 +465,30 @@ mod test {
             nonce: secretbox::Nonce([0u8;24]),
         };
 
-        let stream = CircularBuffer::new(64);
-        let mut writer = BoxStreamWrite::new(stream,send_key_nonce,2048);
+        let stream = CircularBuffer::new(16384);
+        let mut writer = BoxStreamWrite::new(stream,send_key_nonce,16384);
+        
         writer.write_all(b"hola").await?;
+        writer.write_all(b"antoni").await?;
+        writer.write_all(&[7u8;5000]).await?;
+        writer.write_all(&[8u8;5000]).await?;
+
         writer.flush().await?;
         
         let BoxStreamWrite { stream , .. } = writer;
-        let mut reader = BoxStreamRead::new(stream,recv_key_nonce,2048);
-        let mut buffer = [0u8;4];
-        reader.read_exact(&mut buffer[..]).await?;
+        let mut reader = BoxStreamRead::new(stream,recv_key_nonce,16384);
+        
+        let mut holaantoni = [0u8;10];
+        let mut sevens = [0u8;5000];
+        let mut eights = [0u8;5000];
 
-        assert_eq!(b"hola",&buffer);
+        reader.read_exact(&mut holaantoni[..]).await?;
+        reader.read_exact(&mut sevens[..]).await?;
+        reader.read_exact(&mut eights[..]).await?;
+        
+        assert_eq!(b"holaantoni",&holaantoni);
+        assert_eq!(true,sevens.iter().all(|n| *n==7));
+        assert_eq!(true,eights.iter().all(|n| *n==8));
 
         Ok(())
     }
