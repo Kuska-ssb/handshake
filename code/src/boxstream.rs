@@ -4,10 +4,8 @@ extern crate sodiumoxide;
 use crate::handshake::SharedSecret;
 use log::debug;
 
-use futures::io::{self}; //, AsyncRead, AsyncWrite};
-                         // use futures::task::{Context, Poll};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
-use std::{cmp, io::Read, io::Write}; //, pin::Pin};
+use std::{cmp, io::Read, io::Write, io};
 
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
@@ -170,6 +168,7 @@ impl<R: Read> Read for BoxStreamRead<R> {
     }
 }
 */
+
 
 impl<R: Read> Read for BoxStreamRead<R> {
 
