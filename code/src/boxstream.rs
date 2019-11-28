@@ -4,10 +4,8 @@ extern crate sodiumoxide;
 use crate::handshake::SharedSecret;
 use log::debug;
 
-use futures::io::{self}; //, AsyncRead, AsyncWrite};
-                         // use futures::task::{Context, Poll};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
-use std::{cmp, io::Read, io::Write}; //, pin::Pin};
+use std::{cmp, io::Read, io::Write, io};
 
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
@@ -21,6 +19,21 @@ pub struct KeyNonce {
     nonce: secretbox::Nonce,
 }
 
+impl KeyNonce {
+    pub fn increment_be_inplace(&mut self) {
+        let mut byte_no : i8 = (self.nonce.0.len() - 1) as i8;
+        while byte_no >= 0 {
+            let (inc,_) = self.nonce.0[byte_no as usize].overflowing_add(1);
+            self.nonce.0[byte_no as usize]=inc;
+            if self.nonce.0[byte_no as usize] > 0 {
+                return;
+            }
+            byte_no-=1;
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Header {
     body_len: usize,
     body_mac: [u8; secretbox::MACBYTES],
@@ -44,18 +57,19 @@ impl Header {
     }
 }
 
-pub struct BoxStream<R, W> {
+pub struct BoxStream<R:Read, W:Write> {
     reader: BoxStreamRead<R>,
     writer: BoxStreamWrite<W>,
 }
 
-impl<R, W> BoxStream<R, W> {
+impl<R:Read, W:Write> BoxStream<R, W> {
     pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
         let BoxStream { reader, writer } = self;
         (reader, writer)
     }
 }
 
+#[derive(Debug)]
 enum RecvStatus {
     ExpectHeader,
     ExpectBody(Header),
@@ -64,34 +78,44 @@ enum RecvStatus {
 pub struct BoxStreamRead<R> {
     stream: R,
     key_nonce: KeyNonce,
+    plain  : Box<[u8]>,
+    plain_len : usize,
+    plain_off : usize,
+    enc: Box<[u8]>,
     // buf: Box<[u8]>,
     // buf_cap: usize,
-    enc: Box<[u8]>,
-    enc_cap: usize,
+    // enc: Box<[u8]>,
+    // enc_cap: usize,
     // dec: Box<[u8]>,
     // dec_pos: usize,
     // dec_cap: usize,
-    status: RecvStatus,
-    need_more_bytes: bool,
+    // status: RecvStatus,
+    // need_more_bytes: bool,
 }
+
+
+/*
 
 impl<R: Read> Read for BoxStreamRead<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        println!("read: enter");
         if self.need_more_bytes {
+            println!("reading more bytes");
             self.enc_cap += self.stream.read(&mut self.enc[self.enc_cap..])?;
         }
-        debug!("read {} bytes", self.enc_cap);
         let mut enc_pos = 0;
         let mut buf_pos = 0;
         loop {
             let result = match self.status {
                 // The first part of a BoxStream message is a fixed length header
                 RecvStatus::ExpectHeader => {
+                    println!("expectheader");
                     match decrypt_box_stream_header(
                         &mut self.key_nonce,
                         &self.enc[enc_pos..self.enc_cap],
                     ) {
                         Ok(header) => {
+                            println!("expectheader complete");
                             enc_pos += MSG_HEADER_LEN;
                             debug!("Header enc_pos: {}", enc_pos);
                             self.status = RecvStatus::ExpectBody(header);
@@ -143,8 +167,61 @@ impl<R: Read> Read for BoxStreamRead<R> {
         Ok(buf_pos)
     }
 }
+*/
 
-impl<R, W> BoxStream<R, W> {
+
+impl<R: Read> Read for BoxStreamRead<R> {
+
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        
+        // no data available, lock until available
+        if self.plain_off == self.plain_len {
+
+            let mut status = RecvStatus::ExpectHeader;
+            let mut read_limit = MSG_HEADER_LEN;
+            let mut enc_cap = 0;
+
+            loop {
+                enc_cap += self.stream.read(&mut self.enc[enc_cap..read_limit])?;
+                if enc_cap < read_limit {
+                    continue;
+                }
+                match status {
+                    RecvStatus::ExpectHeader => {
+                        let header = decrypt_box_stream_header(
+                            &mut self.key_nonce,
+                            &self.enc[..enc_cap],
+                        )?;
+                        if header.body_len > self.enc.len() {
+                            return Err(io::Error::new(io::ErrorKind::Other, "internal buffer too small"));
+                        }
+                        read_limit = MSG_HEADER_LEN + header.body_len;
+                        status = RecvStatus::ExpectBody(header);
+                    }
+                    RecvStatus::ExpectBody(ref header) => {
+                        self.plain_len = decrypt_box_stream_body(
+                            header,
+                            &mut self.key_nonce,
+                            &self.enc[MSG_HEADER_LEN..read_limit],
+                            &mut self.plain[..header.body_len],
+                        )?;
+                        self.plain_off = 0;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // read from plaintext buffer
+        let len = cmp::min(self.plain_len-self.plain_off,buf.len());
+        buf[..len].copy_from_slice(&self.plain[self.plain_off..len]);
+        self.plain_off += len;
+        Ok(len)
+    }
+
+}
+
+impl<R:Read, W:Write> BoxStream<R, W> {
     pub fn new(
         read_stream: R,
         write_stream: W,
@@ -198,15 +275,19 @@ impl<R, W> BoxStream<R, W> {
         let reader = BoxStreamRead {
             stream: read_stream,
             key_nonce: recv_key_nonce,
+            plain: vec![0; capacity].into_boxed_slice(),
+            plain_len : 0,
+            plain_off : 0,
+            enc: vec![0; capacity].into_boxed_slice(),
             // buf: vec![0; capacity].into_boxed_slice(),
             // buf_cap: 0,
-            enc: vec![0; capacity].into_boxed_slice(),
-            enc_cap: 0,
+            // enc: vec![0; capacity].into_boxed_slice(),
+            // enc_cap: 0,
             // dec: vec![0; capacity].into_boxed_slice(),
             // dec_pos: 0,
             // dec_cap: 0,
-            status: RecvStatus::ExpectHeader,
-            need_more_bytes: true,
+            // status: RecvStatus::ExpectHeader,
+            // need_more_bytes: true,
         };
         let writer = BoxStreamWrite {
             stream: write_stream,
@@ -219,6 +300,7 @@ impl<R, W> BoxStream<R, W> {
         };
         Self { reader, writer }
     }
+
 }
 
 // Decrypt BoxStream messages from recv.buf into recv.dec.  Return the position of the first
@@ -374,9 +456,9 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8
     let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
 
     let header_nonce = key_nonce.nonce;
-    key_nonce.nonce.increment_le_inplace();
+    key_nonce.increment_be_inplace();
     let body_nonce = key_nonce.nonce;
-    key_nonce.nonce.increment_le_inplace();
+    key_nonce.increment_be_inplace();
     debug!(
         "encrypt header_nonce: {}",
         hex::encode(header_nonce.as_ref())
@@ -401,15 +483,10 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
             "not enough bytes to read a header",
         ));
     }
-    debug!("decrypt header buf len: {}", buf.len());
     let secret_header = &buf[..MSG_HEADER_LEN];
-    debug!(
-        "decrypt header_nonce: {}",
-        hex::encode(key_nonce.nonce.as_ref())
-    );
     match secretbox::open(secret_header, &key_nonce.nonce, &key_nonce.key) {
         Ok(h) => {
-            key_nonce.nonce.increment_le_inplace();
+            key_nonce.increment_be_inplace();
             Ok(Header::from_bytes(array_ref![&h, 0, 18]))
         }
         Err(()) => {
@@ -434,13 +511,9 @@ fn decrypt_box_stream_body(
         ));
     }
     let secret_body = &[header.body_mac.as_ref(), &buf[..header.body_len]].concat();
-    debug!(
-        "decrypt body_nonce: {}",
-        hex::encode(key_nonce.nonce.as_ref())
-    );
     match secretbox::open(secret_body, &key_nonce.nonce, &key_nonce.key) {
         Ok(body) => {
-            key_nonce.nonce.increment_le_inplace();
+            key_nonce.increment_be_inplace();
             dec[..header.body_len].copy_from_slice(&body);
             Ok(header.body_len)
         }
@@ -514,3 +587,4 @@ fn decrypt_box_stream_body(
 //         Pin::new(stream).poll_close(cx)
 //     }
 // }
+

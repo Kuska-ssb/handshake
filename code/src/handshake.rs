@@ -456,7 +456,7 @@ impl<R, W: Write> Handshake<R, W, SendServerAccept> {
     }
 }
 
-impl<R, W> Handshake<R, W, Complete> {
+impl<R:Read, W:Write> Handshake<R, W, Complete> {
     pub fn to_box_stream(self, recv_buf_len: usize) -> BoxStream<R, W> {
         BoxStream::new(
             self.base.read_stream,
