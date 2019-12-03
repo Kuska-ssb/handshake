@@ -45,7 +45,11 @@ impl CircularBuffer {
     pub fn cap(&self) -> usize {
         return self.buffer.len();
     }
-
+    pub fn clear(&mut self) {
+        self.start = 0;
+        self.end = 0;
+        self.len = 0;
+    }
     pub fn write_from<R: Read>(&mut self, reader : &mut R) -> io::Result<()> {        
         let mut readed = 1;
 
@@ -142,6 +146,7 @@ impl Read for CircularBuffer {
 
 impl async_std::io::Read for CircularBuffer {
     fn poll_read( self: Pin<&mut Self>, _cx: &mut Context, buf : &mut [u8] ) -> Poll<async_std::io::Result<usize>> {
+        // TODO(amb) check
         debug!("  cbuffer_poll_read {}",buf.len());
         Poll::Ready(self.get_mut().read(buf))
     }
@@ -149,6 +154,7 @@ impl async_std::io::Read for CircularBuffer {
 
 impl async_std::io::Write for CircularBuffer {
     fn poll_write(self: Pin<&mut Self>, _cx: &mut Context,buf: &[u8]) -> Poll<async_std::io::Result<usize>> {
+        // TODO(amb) check
         Poll::Ready(self.get_mut().write(buf))
     }
     fn poll_flush(self: Pin<&mut Self>, _cx : &mut Context) -> Poll<async_std::io::Result<()>> {

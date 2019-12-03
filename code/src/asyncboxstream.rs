@@ -1,7 +1,7 @@
 extern crate log;
 extern crate sodiumoxide;
 
-use crate::handshake::SharedSecret;
+use crate::asynchandshake::SharedSecret;
 use log::debug;
 use crate::buffer::CircularBuffer;
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
@@ -63,7 +63,7 @@ impl Header {
     }
 }
 
-pub struct BoxStreamRead<R> {
+pub struct AsyncBoxStreamRead<R> {
     stream: R,
     key_nonce: KeyNonce,
     dec  : Box<[u8]>,
@@ -75,7 +75,7 @@ pub struct BoxStreamRead<R> {
     enc_cap : usize,
 }
 
-pub struct BoxStreamWrite<W> {
+pub struct AsyncBoxStreamWrite<W> {
     stream: W,
     key_nonce: KeyNonce,
     enc: CircularBuffer,
@@ -83,15 +83,15 @@ pub struct BoxStreamWrite<W> {
     dec_len : usize,
 }
 
-pub struct BoxStream<R:Read, W:Write> {
-    reader: BoxStreamRead<R>,
-    writer: BoxStreamWrite<W>,
+pub struct AsyncBoxStream<R:Read, W:Write> {
+    reader: AsyncBoxStreamRead<R>,
+    writer: AsyncBoxStreamWrite<W>,
 }
 
 
-impl<R:Read, W:Write> BoxStream<R, W> {
-    pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
-        let BoxStream { reader, writer } = self;
+impl<R:Read, W:Write> AsyncBoxStream<R, W> {
+    pub fn split_read_write(self) -> (AsyncBoxStreamRead<R>, AsyncBoxStreamWrite<W>) {
+        let AsyncBoxStream { reader, writer } = self;
         (reader, writer)
     }
 }
@@ -102,11 +102,11 @@ enum RecvStatus {
     ExpectBody(Header),
 }
 
-impl<R> BoxStreamRead<R> 
+impl<R> AsyncBoxStreamRead<R> 
 where
     R : Read+Unpin
 {
-    pub fn new(stream: R, key_nonce : KeyNonce, capacity: usize) -> BoxStreamRead<R> {
+    pub fn new(stream: R, key_nonce : KeyNonce, capacity: usize) -> AsyncBoxStreamRead<R> {
         Self {
             stream: stream,
             key_nonce: key_nonce,
@@ -121,8 +121,7 @@ where
     }
 }
 
-
-impl<R> Read for BoxStreamRead<R>
+impl<R> Read for AsyncBoxStreamRead<R>
 where
     R : Read+Unpin
 {
@@ -130,28 +129,21 @@ where
 
         debug!("poll_read {}",buf.len());
 
-        let BoxStreamRead {
+        let AsyncBoxStreamRead {
             stream, key_nonce, enc, status, dec, read_limit, enc_cap, dec_off, dec_len, ..
         } = self.get_mut();
 
         if dec_off == dec_len {
 
-            let poll = Pin::new(stream).poll_read(cx,&mut enc[*enc_cap..*read_limit]);
-            match poll {
-                Poll::Ready(Ok(n)) => {
-                    *enc_cap += n;
-                }
-                Poll::Ready(Err(e)) => {
-                    return Poll::Ready(Err(e));
-                }
-                Poll::Pending => {
-                    return Poll::Pending;
-                }
-            }
+            let polled_read = Pin::new(stream).poll_read(cx,&mut enc[*enc_cap..*read_limit]);
+            *enc_cap += futures::ready!(polled_read)?;
+            debug!("  poll_read data_readed {}",*enc_cap);
+            debug!("  poll_read data_readed {}",hex::encode(&enc[..*enc_cap]));
+
             if enc_cap < read_limit {
                 return Poll::Pending;
             }
-            
+
             match status {
                 RecvStatus::ExpectHeader => {
                     debug!("  poll_read expect_header");
@@ -195,6 +187,7 @@ where
             *dec_off = 0;
             *dec_len = 0;
             *enc_cap = 0;
+            (0..enc.len()).for_each(|i| enc[i]=0);
             debug!("    *reset");
         }
 
@@ -202,7 +195,7 @@ where
     }
 }
 
-impl<R:Read+Unpin, W:Write+Unpin> BoxStream<R, W> {
+impl<R:Read+Unpin, W:Write+Unpin> AsyncBoxStream<R, W> {
     pub fn new(
         read_stream: R,
         write_stream: W,
@@ -238,33 +231,33 @@ impl<R:Read+Unpin, W:Write+Unpin> BoxStream<R, W> {
         };
         let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
         debug!(
-            "recv_key_nonce.key {}",
+            "  recv_key_nonce.key {}",
             hex::encode(recv_key_nonce.key.as_ref())
         );
         debug!(
-            "recv_key_nonce.nonce {}",
+            "  recv_key_nonce.nonce {}",
             hex::encode(recv_key_nonce.nonce.as_ref())
         );
         debug!(
-            "send_key_nonce.key {}",
+            "  send_key_nonce.key {}",
             hex::encode(send_key_nonce.key.as_ref())
         );
         debug!(
-            "send_key_nonce.nonce {}",
+            "  send_key_nonce.nonce {}",
             hex::encode(send_key_nonce.nonce.as_ref())
         );
         Self {
-            reader : BoxStreamRead::new(read_stream, recv_key_nonce, capacity),
-            writer : BoxStreamWrite::new(write_stream, send_key_nonce, capacity),
+            reader : AsyncBoxStreamRead::new(read_stream, recv_key_nonce, capacity),
+            writer : AsyncBoxStreamWrite::new(write_stream, send_key_nonce, capacity),
         }
     }
 }
 
-impl<W> BoxStreamWrite<W>
+impl<W> AsyncBoxStreamWrite<W>
 where
     W : Write+Unpin
 {
-    pub fn new(stream: W, key_nonce : KeyNonce, capacity: usize) -> BoxStreamWrite<W> {
+    pub fn new(stream: W, key_nonce : KeyNonce, capacity: usize) -> AsyncBoxStreamWrite<W> {
         Self {
             stream: stream,
             key_nonce: key_nonce,
@@ -275,7 +268,7 @@ where
     }
 }
 
-impl<W> Write for BoxStreamWrite<W>
+impl<W> Write for AsyncBoxStreamWrite<W>
 where
     W : Write+Unpin
  {
@@ -286,10 +279,10 @@ where
         buf: &[u8]
     ) -> Poll<Result<usize>> {
 
-        debug!("poll_write buf_len={}",buf.len());
+        debug!("poll_write buf_len={} {}",buf.len(),hex::encode(buf));
 
         // Encrypt into as many messages as we can fit in the self.send.enc buffer
-        let BoxStreamWrite { dec_len, dec, enc, key_nonce, stream, .. }
+        let AsyncBoxStreamWrite { dec_len, dec, enc, key_nonce, stream, .. }
         = self.get_mut();
 
         let mut consumed_bytes = 0;
@@ -306,7 +299,9 @@ where
             debug!("  buffer_write full packet");
             // there's a full packet to cipher
             if enc.cap()-enc.len() >= MSG_HEADER_LEN + MSG_BODY_MAX_LEN {
+                
                 // and also there's enough space in to store a new ciphered packet
+                // write ciphered data to enc
                 let mut tmp_enc = Vec::with_capacity(MSG_HEADER_LEN + MSG_BODY_MAX_LEN);    
                 encrypt_box_stream_msg(key_nonce, &dec[0..MSG_BODY_MAX_LEN], &mut tmp_enc);
                 match enc.write_from(&mut &tmp_enc[..]) {
@@ -321,28 +316,20 @@ where
 
         debug!("  buffer_write consumed_bytes={}",consumed_bytes);
 
-        if enc.len() > 0 {
-            let poll = Pin::new(stream).poll_write(cx,enc.contiguous_value());
-            match poll {
-                Poll::Ready(Ok(n)) => {
-                    debug!("  buffer_write stream_write {} (contiguous is {})",n, enc.contiguous_value().len());
-                    enc.skip(n);
-                    Poll::Ready(Ok(consumed_bytes))
-                },
-                Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
-                Poll::Pending => Poll::Pending,
-            }
-        } else {
-            Poll::Ready(Ok(consumed_bytes))
-        }
+        if enc.len() > 0 {            
+            let polled_write = Pin::new(stream).poll_write(cx,enc.contiguous_value());
+            let n = futures::ready!(polled_write)?;
+            enc.skip(n);
+        } 
+        Poll::Ready(Ok(consumed_bytes))
     }
 
     // Attempt to flush the object, ensuring that any buffered data reach their destination.
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
 
-        debug!("poll_flush");
+        debug!("poll_flush ");
 
-        let BoxStreamWrite { stream, enc, key_nonce, dec, dec_len, .. } = self.get_mut();
+        let AsyncBoxStreamWrite { stream, enc, key_nonce, dec, dec_len, .. } = self.get_mut();
 
         if *dec_len > 0 {
             // cipher pending data
@@ -360,16 +347,18 @@ where
 
         enc.defrag();
         debug!("  buffer_flush stream_write_contiguous {}", enc.len());
-        let poll = Pin::new(stream).poll_write(cx,enc.contiguous_value());
-        match poll {
-            Poll::Ready(Ok(_)) => Poll::Ready(Ok(())),  // what here if there's not enough??
-            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
-            Poll::Pending => Poll::Pending
-        }    
+        debug!("  buffer_flush stream_write_contiguous {}", hex::encode(enc.contiguous_value()));
+        let n = futures::ready!(Pin::new(stream).poll_write(cx,enc.contiguous_value()))?;
+
+        if n != enc.contiguous_value().len() {
+            panic!("uups, cannot flush all data! :(");
+        }
+        enc.clear();
+        Poll::Ready(Ok(()))
     }
     
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        let BoxStreamWrite { stream, .. } = self.get_mut();
+        let AsyncBoxStreamWrite { stream, .. } = self.get_mut();
         Pin::new(stream).poll_close(cx)
     }
 }
@@ -378,8 +367,10 @@ where
 fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8>) -> usize {
     let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
 
+    
     let header_nonce = key_nonce.nonce;
     key_nonce.increment_be_inplace();
+
     let body_nonce = key_nonce.nonce;
     key_nonce.increment_be_inplace();
     debug!(
@@ -393,10 +384,13 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8
         body_len: body.len(),
         body_mac: *array_ref![secret_body, 0, secretbox::MACBYTES],
     };
+    
     let secret_header = secretbox::seal(&header.to_bytes(), &header_nonce, &key_nonce.key);
+    
     <Vec<u8> as std::io::Write>::write(enc,&secret_header).unwrap();
     <Vec<u8> as std::io::Write>::write(enc,&secret_body[secretbox::MACBYTES..]).unwrap();
     return body.len();
+
 }
 
 fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result<Header> {
@@ -407,6 +401,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
         ));
     }
     let secret_header = &buf[..MSG_HEADER_LEN];
+    debug!("ready to decript encrypted header data: {}", hex::encode(&secret_header));
     match secretbox::open(secret_header, &key_nonce.nonce, &key_nonce.key) {
         Ok(h) => {
             key_nonce.increment_be_inplace();
@@ -466,7 +461,7 @@ mod test {
         };
 
         let stream = CircularBuffer::new(16384);
-        let mut writer = BoxStreamWrite::new(stream,send_key_nonce,16384);
+        let mut writer = AsyncBoxStreamWrite::new(stream,send_key_nonce,16384);
         
         writer.write_all(b"hola").await?;
         writer.write_all(b"antoni").await?;
@@ -475,8 +470,8 @@ mod test {
 
         writer.flush().await?;
         
-        let BoxStreamWrite { stream , .. } = writer;
-        let mut reader = BoxStreamRead::new(stream,recv_key_nonce,16384);
+        let AsyncBoxStreamWrite { stream , .. } = writer;
+        let mut reader = AsyncBoxStreamRead::new(stream,recv_key_nonce,16384);
         
         let mut holaantoni = [0u8;10];
         let mut sevens = [0u8;5000];
