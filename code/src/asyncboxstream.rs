@@ -63,136 +63,29 @@ impl Header {
     }
 }
 
-pub struct AsyncBoxStreamRead<R> {
-    stream: R,
-    key_nonce: KeyNonce,
-    dec  : Box<[u8]>,
-    dec_len : usize,
-    dec_off : usize,
-    enc: Box<[u8]>,
-    status :  RecvStatus,
-    read_limit : usize,
-    enc_cap : usize,
-}
-
-pub struct AsyncBoxStreamWrite<W> {
-    stream: W,
-    key_nonce: KeyNonce,
-    enc: CircularBuffer,
-    dec: Box<[u8]>,
-    dec_len : usize,
-}
-
 pub struct AsyncBoxStream<R:Read, W:Write> {
     reader: AsyncBoxStreamRead<R>,
     writer: AsyncBoxStreamWrite<W>,
 }
 
-
-impl<R:Read, W:Write> AsyncBoxStream<R, W> {
-    pub fn split_read_write(self) -> (AsyncBoxStreamRead<R>, AsyncBoxStreamWrite<W>) {
-        let AsyncBoxStream { reader, writer } = self;
-        (reader, writer)
-    }
+pub struct AsyncBoxStreamRead<R> {
+    stream: R,
+    key_nonce: KeyNonce,
+    plain  : Box<[u8]>,
+    plain_len : usize,
+    plain_off : usize,
+    cipher: Box<[u8]>,
+    cipher_len : usize,
+    status :  RecvStatus,
+    read_limit : usize,
 }
 
-#[derive(Debug)]
-enum RecvStatus {
-    ExpectHeader,
-    ExpectBody(Header),
-}
-
-impl<R> AsyncBoxStreamRead<R> 
-where
-    R : Read+Unpin
-{
-    pub fn new(stream: R, key_nonce : KeyNonce, capacity: usize) -> AsyncBoxStreamRead<R> {
-        Self {
-            stream: stream,
-            key_nonce: key_nonce,
-            dec: vec![0; capacity].into_boxed_slice(),
-            dec_len : 0,
-            dec_off : 0,
-            enc: vec![0; capacity].into_boxed_slice(),
-            enc_cap : 0,
-            status : RecvStatus::ExpectHeader,
-            read_limit : MSG_HEADER_LEN,    
-        }
-    }
-}
-
-impl<R> Read for AsyncBoxStreamRead<R>
-where
-    R : Read+Unpin
-{
-    fn poll_read( self: Pin<&mut Self>, cx:&mut Context,buf :&mut [u8] ) -> Poll<Result<usize>> {
-
-        debug!("poll_read {}",buf.len());
-
-        let AsyncBoxStreamRead {
-            stream, key_nonce, enc, status, dec, read_limit, enc_cap, dec_off, dec_len, ..
-        } = self.get_mut();
-
-        if dec_off == dec_len {
-
-            let polled_read = Pin::new(stream).poll_read(cx,&mut enc[*enc_cap..*read_limit]);
-            *enc_cap += futures::ready!(polled_read)?;
-            debug!("  poll_read data_readed {}",*enc_cap);
-            debug!("  poll_read data_readed {}",hex::encode(&enc[..*enc_cap]));
-
-            if enc_cap < read_limit {
-                return Poll::Pending;
-            }
-
-            match status {
-                RecvStatus::ExpectHeader => {
-                    debug!("  poll_read expect_header");
-                    let header = decrypt_box_stream_header(
-                        key_nonce,
-                        &mut enc[..*enc_cap],
-                    )?;
-                    if header.body_len > enc.len() {
-                        return Poll::Ready(Err(Error::new(ErrorKind::Other, "internal buffer too small")));
-                    }
-                    *read_limit = MSG_HEADER_LEN + header.body_len;
-                    debug!("  poll_read header_complete body_len={}",header.body_len);
-                    *status = RecvStatus::ExpectBody(header);
-                    return Poll::Pending;
-                }
-                RecvStatus::ExpectBody(ref header) => {
-                    debug!("  poll_read expect_body");
-                    *dec_len = decrypt_box_stream_body(
-                        header,
-                        key_nonce,
-                        &mut enc[MSG_HEADER_LEN..*read_limit],
-                        &mut dec[..header.body_len],
-                    )?;
-                    debug!("  poll_read decipher_complete body_len={}",header.body_len);
-                    *dec_off = 0;
-                }
-            }
-        }
-
-        // read from dectext buffer
-        let len = cmp::min(*dec_len-*dec_off,buf.len());
-        buf[..len].copy_from_slice(&dec[*dec_off..*dec_off+len]);
-        *dec_off += len;
-
-        debug!("  poll_read reading_deciphered_buffer req {} got {}",buf.len(),len);
-        debug!("    dec_off={} dec_len={}",dec_off, dec_len);
-
-        if dec_off == dec_len  {
-            *status = RecvStatus::ExpectHeader;
-            *read_limit = MSG_HEADER_LEN;
-            *dec_off = 0;
-            *dec_len = 0;
-            *enc_cap = 0;
-            (0..enc.len()).for_each(|i| enc[i]=0);
-            debug!("    *reset");
-        }
-
-        Poll::Ready(Ok(len))
-    }
+pub struct AsyncBoxStreamWrite<W> {
+    stream: W,
+    key_nonce: KeyNonce,
+    cipher: CircularBuffer,
+    plain: Box<[u8]>,
+    plain_len : usize,
 }
 
 impl<R:Read+Unpin, W:Write+Unpin> AsyncBoxStream<R, W> {
@@ -253,6 +146,120 @@ impl<R:Read+Unpin, W:Write+Unpin> AsyncBoxStream<R, W> {
     }
 }
 
+
+impl<R:Read, W:Write> AsyncBoxStream<R, W> {
+    pub fn split_read_write(self) -> (AsyncBoxStreamRead<R>, AsyncBoxStreamWrite<W>) {
+        let AsyncBoxStream { reader, writer } = self;
+        (reader, writer)
+    }
+}
+
+#[derive(Debug)]
+enum RecvStatus {
+    ExpectHeader,
+    ExpectBody(Header),
+}
+
+impl<R> AsyncBoxStreamRead<R> 
+where
+    R : Read+Unpin
+{
+    pub fn new(stream: R, key_nonce : KeyNonce, capacity: usize) -> AsyncBoxStreamRead<R> {
+        Self {
+            stream: stream,
+            key_nonce: key_nonce,
+            plain: vec![0; capacity].into_boxed_slice(),
+            plain_len : 0,
+            plain_off : 0,
+            cipher: vec![0; capacity].into_boxed_slice(),
+            cipher_len : 0,
+            status : RecvStatus::ExpectHeader,
+            read_limit : MSG_HEADER_LEN,    
+        }
+    }
+}
+
+impl<R> Read for AsyncBoxStreamRead<R>
+where
+    R : Read+Unpin
+{
+    fn poll_read( self: Pin<&mut Self>, cx:&mut Context,buf :&mut [u8] ) -> Poll<Result<usize>> {
+
+        debug!("poll_read {}",buf.len());
+
+        let this = self.get_mut();
+
+        // if there's no data pending to read from deciphered text, read from underlying reader
+        if this.plain_off == this.plain_len {
+
+            // read up to read_limit
+            let polled_read = Pin::new(&mut this.stream)
+                .poll_read(cx,&mut this.cipher[this.cipher_len..this.read_limit]);
+            
+            this.cipher_len += futures::ready!(polled_read)?;
+            debug!("  poll_read data_readed {}",this.cipher_len);
+
+            // it there's not enough for filling the buffer return pending
+            // it is supposed that another poll_read is will be triggered, and this will 
+            //   call this stream.poll_read and cx is going to attach to the underlying reader 
+            if this.cipher_len < this.read_limit {
+                return Poll::Pending;
+            }
+
+            match this.status {
+                // Waiting for the header
+                RecvStatus::ExpectHeader => {
+                    debug!("  poll_read expect_header");
+                    let header = decrypt_box_stream_header(
+                        &mut this.key_nonce,
+                        &mut this.cipher[..this.cipher_len],
+                    )?;
+                    if header.body_len > this.cipher.len() {
+                        return Poll::Ready(Err(Error::new(ErrorKind::Other, "internal buffer too small")));
+                    }
+                    this.read_limit = MSG_HEADER_LEN + header.body_len;
+                    debug!("  poll_read header_complete body_len={}",header.body_len);
+                    this.status = RecvStatus::ExpectBody(header);
+                    return Poll::Pending;
+                }
+                // Waiting for the body
+                RecvStatus::ExpectBody(ref header) => {
+                    debug!("  poll_read expect_body");
+                    this.plain_len = decrypt_box_stream_body(
+                        header,
+                        &mut this.key_nonce,
+                        &mut this.cipher[MSG_HEADER_LEN..this.read_limit],
+                        &mut this.plain[..header.body_len],
+                    )?;
+                    debug!("  poll_read decipher_complete body_len={}",header.body_len);
+                    this.plain_off = 0;
+                }
+            }
+        }
+
+        // copy data from plaintext buffer
+        let len = cmp::min(this.plain_len-this.plain_off,buf.len());
+        buf[..len].copy_from_slice(&this.plain[this.plain_off..this.plain_off+len]);
+        this.plain_off += len;
+
+        debug!("  poll_read reading_deciphered_buffer req {} got {}",buf.len(),len);
+        debug!("    plain_off={} plain_len={}",this.plain_off, this.plain_len);
+
+        // if all data has been readed, prepare to read next header
+        if this.plain_off == this.plain_len  {
+            debug!("    *reset");
+            this.status = RecvStatus::ExpectHeader;
+            this.read_limit = MSG_HEADER_LEN;
+            this.plain_off = 0;
+            this.plain_len = 0;
+            this.cipher_len = 0;
+        }
+
+        Poll::Ready(Ok(len))
+    }
+}
+
+
 impl<W> AsyncBoxStreamWrite<W>
 where
     W : Write+Unpin
@@ -261,9 +268,9 @@ where
         Self {
             stream: stream,
             key_nonce: key_nonce,
-            enc: CircularBuffer::new(capacity),
-            dec: vec![0; MSG_BODY_MAX_LEN].into_boxed_slice(),
-            dec_len : 0,
+            cipher: CircularBuffer::new(capacity),
+            plain: vec![0; MSG_BODY_MAX_LEN].into_boxed_slice(),
+            plain_len : 0,
         }
     }
 }
@@ -281,45 +288,46 @@ where
 
         debug!("poll_write buf_len={} {}",buf.len(),hex::encode(buf));
 
-        // Encrypt into as many messages as we can fit in the self.send.enc buffer
-        let AsyncBoxStreamWrite { dec_len, dec, enc, key_nonce, stream, .. }
-        = self.get_mut();
-
+        let this = self.get_mut();
         let mut consumed_bytes = 0;
 
-        if *dec_len < MSG_BODY_MAX_LEN {
-            // there's enough space in plaintext buffer
-            consumed_bytes = cmp::min(MSG_BODY_MAX_LEN-*dec_len,buf.len());
-            &dec[*dec_len..*dec_len+consumed_bytes].copy_from_slice(&buf[..consumed_bytes]);
-            *dec_len += consumed_bytes;
+        // there's enough space in plaintext buffer fill it 
+        if this.plain_len < MSG_BODY_MAX_LEN {
+            consumed_bytes = cmp::min(MSG_BODY_MAX_LEN-this.plain_len,buf.len());
+            &this.plain[this.plain_len..this.plain_len+consumed_bytes].copy_from_slice(&buf[..consumed_bytes]);
+            this.plain_len += consumed_bytes;
             debug!("  buffer_write dec_write {} (buf_len={})",consumed_bytes,buf.len());
         }
 
-        if *dec_len == MSG_BODY_MAX_LEN {
-            debug!("  buffer_write full packet");
-            // there's a full packet to cipher
-            if enc.cap()-enc.len() >= MSG_HEADER_LEN + MSG_BODY_MAX_LEN {
-                
-                // and also there's enough space in to store a new ciphered packet
-                // write ciphered data to enc
-                let mut tmp_enc = Vec::with_capacity(MSG_HEADER_LEN + MSG_BODY_MAX_LEN);    
-                encrypt_box_stream_msg(key_nonce, &dec[0..MSG_BODY_MAX_LEN], &mut tmp_enc);
-                match enc.write_from(&mut &tmp_enc[..]) {
+        // there's a full packet of plaintext, try cipher it
+        if this.plain_len == MSG_BODY_MAX_LEN {
+
+            // check if there's enough space in to store a new ciphered packet in the output buffer
+            if this.cipher.cap()-this.cipher.len() >= MSG_HEADER_LEN + MSG_BODY_MAX_LEN {
+
+                // all ok, cipher it, and reset the plaintext buffer
+                let mut tmp_cipher = Vec::with_capacity(MSG_HEADER_LEN + MSG_BODY_MAX_LEN);    
+                encrypt_box_stream_msg(&mut this.key_nonce, &this.plain[0..MSG_BODY_MAX_LEN], &mut tmp_cipher);
+                match this.cipher.write_from(&mut &tmp_cipher[..]) {
                     Err(err) => return Poll::Ready(Err(err)),
                     _ => ()
                 };
-                *dec_len = 0;
-                debug!("  buffer_write enc_write tmp_buf_len {}", tmp_enc.len());
-                debug!("  buffer_write enc_write enc_len {}", enc.len());
+                this.plain_len = 0;
             }
         }
 
         debug!("  buffer_write consumed_bytes={}",consumed_bytes);
 
-        if enc.len() > 0 {            
-            let polled_write = Pin::new(stream).poll_write(cx,enc.contiguous_value());
+        // if there's some ciphertext to send to the writer, send to it
+        //   only contiguos bytes in the circular buffer are sent, so in next 
+        //   call will continue if the whole buffer is not drained
+
+        if this.cipher.len() > 0 {            
+            let polled_write = Pin::new(&mut this.stream)
+                .poll_write(cx,this.cipher.contiguous_value());
+            
             let n = futures::ready!(polled_write)?;
-            enc.skip(n);
+            this.cipher.skip(n);
         } 
         Poll::Ready(Ok(consumed_bytes))
     }
@@ -328,32 +336,36 @@ where
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
 
         debug!("poll_flush ");
+        let this = self.get_mut();
 
-        let AsyncBoxStreamWrite { stream, enc, key_nonce, dec, dec_len, .. } = self.get_mut();
+        // if there's pending data to cipher, cipher it into the cipher buffer
+        if this.plain_len > 0 {
 
-        if *dec_len > 0 {
-            // cipher pending data
-            debug!("  buffer_flush dec_len {}",*dec_len);
-            let mut tmp_enc = Vec::with_capacity(MSG_HEADER_LEN + *dec_len);    
-            encrypt_box_stream_msg(key_nonce, &dec[0..*dec_len], &mut tmp_enc);
-            match enc.write_from(&mut &tmp_enc[..]) {
+            debug!("  buffer_flush plain_len {}",this.plain_len);
+            let mut tmp_cipher = Vec::with_capacity(MSG_HEADER_LEN + this.plain_len);    
+            encrypt_box_stream_msg(&mut this.key_nonce, &this.plain[0..this.plain_len], &mut tmp_cipher);
+            match this.cipher.write_from(&mut &tmp_cipher[..]) {
                 Err(err) => return Poll::Ready(Err(err)),
                 _ => ()
             };
-            debug!("  buffer_flush enc_write tmp_buf_len {}", tmp_enc.len());
-            debug!("  buffer_flush enc_write enc_len {}", enc.len());
-            *dec_len = 0;
+            debug!("  buffer_flush enc_write tmp_buf_len {}", tmp_cipher.len());
+            debug!("  buffer_flush enc_write enc_len {}", this.cipher.len());
+            this.plain_len = 0;
         }
 
-        enc.defrag();
-        debug!("  buffer_flush stream_write_contiguous {}", enc.len());
-        debug!("  buffer_flush stream_write_contiguous {}", hex::encode(enc.contiguous_value()));
-        let n = futures::ready!(Pin::new(stream).poll_write(cx,enc.contiguous_value()))?;
-
-        if n != enc.contiguous_value().len() {
-            panic!("uups, cannot flush all data! :(");
+        // flush all the cipher data 
+        let n = futures::ready!(Pin::new(&mut this.stream).poll_write(cx,this.cipher.contiguous_value()))?;
+        this.cipher.skip(n);
+        if this.cipher.len() > 0 {
+            // maybe there's more data to send in the second part of the circular buffer
+            let n = futures::ready!(Pin::new(&mut this.stream).poll_write(cx,this.cipher.contiguous_value()))?;
+            this.cipher.skip(n);
         }
-        enc.clear();
+        if this.cipher.len() > 0  {
+            return Poll::Pending;
+        }
+
+        this.cipher.clear();
         Poll::Ready(Ok(()))
     }
     
