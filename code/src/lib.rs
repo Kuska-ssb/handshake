@@ -9,6 +9,7 @@ extern crate base64;
 
 pub mod asyncboxstream;
 pub mod asynchandshake;
+pub mod asyncrpc;
 
 pub mod boxstream;
 pub mod handshake;
