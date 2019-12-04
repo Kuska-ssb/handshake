@@ -20,9 +20,16 @@ pub const MSG_HEADER_DEC_LEN: usize = 18;
 // Length of encrypted header (with MAC prefixed)
 pub const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
 
+const GOODBYE : [u8;18] = [0u8;18];
+
 pub struct KeyNonce {
     key: secretbox::Key,
     nonce: secretbox::Nonce,
+}
+
+enum MsgType<'a> {
+    Body(&'a [u8]),
+    Goodbye,
 }
 
 impl KeyNonce {
@@ -38,6 +45,12 @@ impl KeyNonce {
         }
     }
 }
+
+enum HeaderType {
+    Body(Header),
+    Goodbye,
+}
+
 
 #[derive(Debug)]
 pub struct Header {
@@ -80,12 +93,21 @@ pub struct AsyncBoxStreamRead<R> {
     read_limit : usize,
 }
 
+#[derive(Debug,PartialEq)]
+pub enum Status {
+    Open,
+    Closing,
+    Closed,
+}
+
 pub struct AsyncBoxStreamWrite<W> {
     stream: W,
     key_nonce: KeyNonce,
     cipher: CircularBuffer,
     plain: Box<[u8]>,
     plain_len : usize,
+    goodbye_off : usize, // how many goodbye bytes are aready sent
+    status : Status,
 }
 
 impl<R:Read+Unpin, W:Write+Unpin> AsyncBoxStream<R, W> {
@@ -183,7 +205,7 @@ impl<R> Read for AsyncBoxStreamRead<R>
 where
     R : Read+Unpin
 {
-    fn poll_read( self: Pin<&mut Self>, cx:&mut Context,buf :&mut [u8] ) -> Poll<Result<usize>> {
+    fn poll_read( self: Pin<&mut Self>, cx:&mut Context, buf :&mut [u8] ) -> Poll<Result<usize>> {
 
         debug!("poll_read {}",buf.len());
 
@@ -195,9 +217,16 @@ where
             // read up to read_limit
             let polled_read = Pin::new(&mut this.stream)
                 .poll_read(cx,&mut this.cipher[this.cipher_len..this.read_limit]);
-            
-            this.cipher_len += futures::ready!(polled_read)?;
-            debug!("  poll_read data_readed {}",this.cipher_len);
+            let data_readed_len = futures::ready!(polled_read)?;
+
+            debug!("  poll_read data_readed {}",data_readed_len);
+
+            // check if the underlying stream is EOF
+            if data_readed_len == 0 {
+                return Poll::Ready(Ok(0));
+            }
+
+            this.cipher_len += data_readed_len;
 
             // it there's not enough for filling the buffer return pending
             // it is supposed that another poll_read is will be triggered, and this will 
@@ -214,13 +243,21 @@ where
                         &mut this.key_nonce,
                         &mut this.cipher[..this.cipher_len],
                     )?;
-                    if header.body_len > this.cipher.len() {
-                        return Poll::Ready(Err(Error::new(ErrorKind::Other, "internal buffer too small")));
+                    match header {
+                        HeaderType::Body(header) => {
+                            if header.body_len > this.cipher.len() {
+                                return Poll::Ready(Err(Error::new(ErrorKind::Other, "internal buffer too small")));
+                            }
+                            this.read_limit = MSG_HEADER_LEN + header.body_len;
+                            debug!("  poll_read header_complete body_len={}",header.body_len);
+                            this.status = RecvStatus::ExpectBody(header);
+                            return Poll::Pending;        
+                        } 
+                        HeaderType::Goodbye => {
+                            debug!("   poll_read goodbye recieved");
+                            return Poll::Ready(Ok(0))
+                        }
                     }
-                    this.read_limit = MSG_HEADER_LEN + header.body_len;
-                    debug!("  poll_read header_complete body_len={}",header.body_len);
-                    this.status = RecvStatus::ExpectBody(header);
-                    return Poll::Pending;
                 }
                 // Waiting for the body
                 RecvStatus::ExpectBody(ref header) => {
@@ -259,6 +296,19 @@ where
     }
 }
 
+pub struct CloseFuture<'a, W: Write + Unpin> {
+    pub(crate) writer : &'a mut W,
+}
+
+impl<W: Write + Unpin> Future for CloseFuture<'_, W> {
+    type Output = io::Result<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let Self { writer } = &mut *self;
+        futures::ready!(Pin::new(&mut *writer).poll_close(cx))?;
+        Poll::Ready(Ok(()))
+    }
+}
 
 impl<W> AsyncBoxStreamWrite<W>
 where
@@ -267,13 +317,60 @@ where
     pub fn new(stream: W, key_nonce : KeyNonce, capacity: usize) -> AsyncBoxStreamWrite<W> {
         Self {
             stream: stream,
+            status : Status::Open,
             key_nonce: key_nonce,
             cipher: CircularBuffer::new(capacity),
             plain: vec![0; MSG_BODY_MAX_LEN].into_boxed_slice(),
             plain_len : 0,
+            goodbye_off : 0,
         }
     }
+
+    pub fn close<'a>(&'a mut self) -> CloseFuture<'a, Self> {
+        CloseFuture { writer : self }
+    }
+
+    fn internal_flush(&mut self, cx: &mut Context) -> Poll<Result<()>> {
+
+        // if there's pending data to cipher, cipher it into the cipher buffer
+        if self.plain_len > 0 {
+
+            debug!("  buffer_flush plain_len {}",self.plain_len);
+            let mut tmp_cipher = Vec::with_capacity(MSG_HEADER_LEN + self.plain_len);    
+            encrypt_box_stream_msg(&mut self.key_nonce, MsgType::Body(&self.plain[0..self.plain_len]), &mut tmp_cipher);
+            match self.cipher.write_from(&mut &tmp_cipher[..]) {
+                Err(err) => return Poll::Ready(Err(err)),
+                _ => ()
+            };
+            debug!("  buffer_flush enc_write tmp_buf_len {}", tmp_cipher.len());
+            debug!("  buffer_flush enc_write enc_len {}", self.cipher.len());
+            self.plain_len = 0;
+        }
+
+        // flush all the cipher data 
+        let n = futures::ready!(Pin::new(&mut self.stream).poll_write(cx,self.cipher.contiguous_value()))?;
+        self.cipher.skip(n);
+        if self.cipher.len() > 0 {
+            // maybe there's more data to send in the second part of the circular buffer
+            let n = futures::ready!(Pin::new(&mut self.stream).poll_write(cx,self.cipher.contiguous_value()))?;
+            self.cipher.skip(n);
+        }
+        if self.cipher.len() > 0  {
+            return Poll::Pending;
+        }
+
+        self.cipher.clear();
+        Poll::Ready(Ok(()))
+    }
+    fn flush_pending(&self) -> bool {
+        self.plain_len  > 0 || self.cipher.len() > 0
+    }
 }
+
+
+
+
+
 
 impl<W> Write for AsyncBoxStreamWrite<W>
 where
@@ -289,6 +386,11 @@ where
         debug!("poll_write buf_len={} {}",buf.len(),hex::encode(buf));
 
         let this = self.get_mut();
+
+        if this.status != Status::Open {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::NotConnected,"Connection closed")))
+        }        
+
         let mut consumed_bytes = 0;
 
         // there's enough space in plaintext buffer fill it 
@@ -307,7 +409,7 @@ where
 
                 // all ok, cipher it, and reset the plaintext buffer
                 let mut tmp_cipher = Vec::with_capacity(MSG_HEADER_LEN + MSG_BODY_MAX_LEN);    
-                encrypt_box_stream_msg(&mut this.key_nonce, &this.plain[0..MSG_BODY_MAX_LEN], &mut tmp_cipher);
+                encrypt_box_stream_msg(&mut this.key_nonce, MsgType::Body(&this.plain[0..MSG_BODY_MAX_LEN]), &mut tmp_cipher);
                 match this.cipher.write_from(&mut &tmp_cipher[..]) {
                     Err(err) => return Poll::Ready(Err(err)),
                     _ => ()
@@ -334,78 +436,95 @@ where
 
     // Attempt to flush the object, ensuring that any buffered data reach their destination.
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-
         debug!("poll_flush ");
+
         let this = self.get_mut();
 
-        // if there's pending data to cipher, cipher it into the cipher buffer
-        if this.plain_len > 0 {
+        if this.status != Status::Open {
+            return Poll::Ready(Err(io::Error::new(io::ErrorKind::NotConnected,"Connection closed")))
+        }        
 
-            debug!("  buffer_flush plain_len {}",this.plain_len);
-            let mut tmp_cipher = Vec::with_capacity(MSG_HEADER_LEN + this.plain_len);    
-            encrypt_box_stream_msg(&mut this.key_nonce, &this.plain[0..this.plain_len], &mut tmp_cipher);
-            match this.cipher.write_from(&mut &tmp_cipher[..]) {
-                Err(err) => return Poll::Ready(Err(err)),
-                _ => ()
-            };
-            debug!("  buffer_flush enc_write tmp_buf_len {}", tmp_cipher.len());
-            debug!("  buffer_flush enc_write enc_len {}", this.cipher.len());
-            this.plain_len = 0;
-        }
-
-        // flush all the cipher data 
-        let n = futures::ready!(Pin::new(&mut this.stream).poll_write(cx,this.cipher.contiguous_value()))?;
-        this.cipher.skip(n);
-        if this.cipher.len() > 0 {
-            // maybe there's more data to send in the second part of the circular buffer
-            let n = futures::ready!(Pin::new(&mut this.stream).poll_write(cx,this.cipher.contiguous_value()))?;
-            this.cipher.skip(n);
-        }
-        if this.cipher.len() > 0  {
-            return Poll::Pending;
-        }
-
-        this.cipher.clear();
-        Poll::Ready(Ok(()))
+        futures::ready!(this.internal_flush(cx))?;
+        Pin::new(&mut this.stream).poll_flush(cx)
     }
     
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        let AsyncBoxStreamWrite { stream, .. } = self.get_mut();
-        Pin::new(stream).poll_close(cx)
+
+        let this = self.get_mut();
+
+        debug!("poll_close ");
+
+        match this.status {
+            Status::Closed => return Poll::Ready(Err(io::Error::new(io::ErrorKind::NotConnected,"Already closed"))),
+            Status::Open => this.status = Status::Closing,
+            _ => {} ,
+        }        
+
+        // if there's pending data to flush, write them
+        if this.flush_pending() {
+            futures::ready!(this.internal_flush(cx))?;
+        }
+
+        // if there's pending goodbye bytes, write them
+        if this.goodbye_off < MSG_HEADER_LEN {
+            let mut tmp_cipher = Vec::with_capacity(MSG_HEADER_LEN);    
+            encrypt_box_stream_msg(&mut this.key_nonce, MsgType::Goodbye, &mut tmp_cipher);
+            let polled_write = Pin::new(&mut this.stream).poll_write(cx,&tmp_cipher[this.goodbye_off..]);
+            this.goodbye_off += futures::ready!(polled_write)?;
+            if this.goodbye_off < MSG_HEADER_LEN {
+                return Poll::Pending 
+            }
+        }
+
+        // close the underlying stream
+        futures::ready!(Pin::new(&mut this.stream).poll_close(cx))?;
+
+        // close box stream
+        this.status = Status::Closed;
+
+        debug!("   poll_close box goodbyte sent");
+        Poll::Ready(Ok(()))
     }
 }
 
 // Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
-fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut Vec<u8>) -> usize {
-    let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
-
+fn encrypt_box_stream_msg<'a>(key_nonce: &mut KeyNonce, msg: MsgType<'a>, enc: &mut Vec<u8>) -> usize {
     
     let header_nonce = key_nonce.nonce;
     key_nonce.increment_be_inplace();
 
-    let body_nonce = key_nonce.nonce;
-    key_nonce.increment_be_inplace();
-    debug!(
-        "encrypt header_nonce: {}",
-        hex::encode(header_nonce.as_ref())
-    );
-    debug!("encrypt body_nonce: {}", hex::encode(body_nonce.as_ref()));
+    match msg {
+        MsgType::Body(body) => {
 
-    let secret_body = secretbox::seal(body, &body_nonce, &key_nonce.key);
-    let header = Header {
-        body_len: body.len(),
-        body_mac: *array_ref![secret_body, 0, secretbox::MACBYTES],
-    };
-    
-    let secret_header = secretbox::seal(&header.to_bytes(), &header_nonce, &key_nonce.key);
-    
-    <Vec<u8> as std::io::Write>::write(enc,&secret_header).unwrap();
-    <Vec<u8> as std::io::Write>::write(enc,&secret_body[secretbox::MACBYTES..]).unwrap();
-    return body.len();
-
+            let body_nonce = key_nonce.nonce;
+            key_nonce.increment_be_inplace();
+            debug!(
+                "encrypt header_nonce: {}",
+                hex::encode(header_nonce.as_ref())
+            );
+            debug!("encrypt body_nonce: {}", hex::encode(body_nonce.as_ref()));
+        
+            let secret_body = secretbox::seal(body, &body_nonce, &key_nonce.key);
+            let header = Header {
+                body_len: body.len(),
+                body_mac: *array_ref![secret_body, 0, secretbox::MACBYTES],
+            };
+            
+            let secret_header = secretbox::seal(&header.to_bytes(), &header_nonce, &key_nonce.key);
+            
+            <Vec<u8> as std::io::Write>::write(enc,&secret_header).unwrap();
+            <Vec<u8> as std::io::Write>::write(enc,&secret_body[secretbox::MACBYTES..]).unwrap();
+            body.len()        
+        }
+        MsgType::Goodbye => {
+            let secret_goodbye = secretbox::seal(&GOODBYE[..], &header_nonce, &key_nonce.key);
+            <Vec<u8> as std::io::Write>::write(enc,&secret_goodbye).unwrap();
+            0
+        }
+    }
 }
 
-fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result<Header> {
+fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result<HeaderType> {
     if buf.len() < MSG_HEADER_LEN {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -417,7 +536,11 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
     match secretbox::open(secret_header, &key_nonce.nonce, &key_nonce.key) {
         Ok(h) => {
             key_nonce.increment_be_inplace();
-            Ok(Header::from_bytes(array_ref![&h, 0, 18]))
+            if h == GOODBYE {
+                Ok(HeaderType::Goodbye)
+            } else {
+                Ok(HeaderType::Body(Header::from_bytes(array_ref![&h, 0, 18])))
+            }
         }
         Err(()) => {
             return Err(io::Error::new(
@@ -458,7 +581,6 @@ fn decrypt_box_stream_body(
 
 mod test {
     use super::*;
-    use std::rc::Rc;
 
     #[async_std::test]
     async fn check_asyncbox() -> io::Result<()> {

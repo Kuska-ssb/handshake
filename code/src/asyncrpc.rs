@@ -1,5 +1,4 @@
 use async_std::io;
-use async_std::pin::Pin;
 use async_std::prelude::*;
 use crate::asyncboxstream::{AsyncBoxStreamRead,AsyncBoxStreamWrite};
 
@@ -108,6 +107,7 @@ pub struct Client<R : io::Read + Unpin, W : io::Write + Unpin> {
     req_no : i32,
 }
 
+
 pub fn parse_error<'a,T:serde::Deserialize<'a>>(data :&'a (Header,Vec<u8>)) -> Result<T,io::Error> {
     if data.0.is_end_or_error {
         let error : ErrorRes = serde_json::from_slice(&data.1[..]).map_err(to_ioerr)?;
@@ -142,6 +142,10 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> Client<R,W> {
         self.box_writer.flush().await?;
 
         Ok(self.req_no)
+    }
+
+    pub async fn close(&mut self) -> Result<(),io::Error> {
+        self.box_writer.close().await
     }
 
     pub async fn send_whoami(&mut self) -> Result<i32,io::Error> {

@@ -86,12 +86,13 @@ async fn test_client(
     // repl
     let mut line_buffer = String::new();
     while let Ok(_) = std::io::stdin().read_line(&mut line_buffer) {
+        if line_buffer.starts_with("eof") {
+            box_stream_write.close().await?;
+            break;
+        }
         box_stream_write.write_all(&line_buffer.as_bytes()).await?;
         box_stream_write.flush().await?;
         let n = box_stream_read.read(&mut buffer[..]).await?;
-        if n == 0 {
-            break
-        }
         let message = String::from_utf8_lossy(&buffer[..n]);
         println!("SERVER SAYS: {}", message);
         line_buffer.clear();

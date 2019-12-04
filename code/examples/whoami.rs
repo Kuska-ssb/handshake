@@ -3,7 +3,7 @@ extern crate code;
 extern crate crossbeam;
 
 use std::io;
-use async_std::net::{TcpStream};
+use async_std::net::{TcpStream,Shutdown};
 
 use code::config::{IdentitySecret,ssb_net_id};
 use code::asynchandshake::AsyncHandshake;
@@ -41,6 +41,7 @@ async fn main() -> io::Result<()> {
             whoami = Some(asyncrpc::parse_error::<asyncrpc::WhoAmI>(&(header,body))?) 
         }
     }
+    client.close().await?;
     
     println!("{}", whoami.unwrap().id);
     Ok(())
