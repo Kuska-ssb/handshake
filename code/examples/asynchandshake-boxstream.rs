@@ -48,22 +48,16 @@ async fn test_server(
     
     // echo server
     let mut buffer = [0;128];
-    loop {
-        match box_stream_read.read(&mut buffer[..]).await {
-            Ok(n) => {
-                if n == 0 {
-                    break
-                }
-                let message = String::from_utf8_lossy(&buffer[..n]);
-                println!("recieved {}", message);
-                let response = format!("Hello {}",message);
-                box_stream_write.write_all(&response.as_bytes()).await?;
-                box_stream_write.flush().await?;
-            }
-            Err(err) => {
-                panic!("{}",err);
-            }
+    loop  {
+        let n = box_stream_read.read(&mut buffer[..]).await?;
+        if n == 0 {
+            break
         }
+        let message = String::from_utf8_lossy(&buffer[..n]);
+        println!("recieved {}", message);
+        let response = format!("Hello {}",message);
+        box_stream_write.write_all(&response.as_bytes()).await?;
+        box_stream_write.flush().await?;
     }
     println!("Connection finished");
     Ok(())
@@ -94,19 +88,13 @@ async fn test_client(
     while let Ok(_) = std::io::stdin().read_line(&mut line_buffer) {
         box_stream_write.write_all(&line_buffer.as_bytes()).await?;
         box_stream_write.flush().await?;
-        match box_stream_read.read(&mut buffer[..]).await {
-            Ok(n) => {
-                if n == 0 {
-                    break
-                }
-                let message = String::from_utf8_lossy(&buffer[..n]);
-                println!("SERVER SAYS: {}", message);
-                line_buffer.clear();
-            }
-            Err(err) => {
-                panic!("{}",err);
-            }
+        let n = box_stream_read.read(&mut buffer[..]).await?;
+        if n == 0 {
+            break
         }
+        let message = String::from_utf8_lossy(&buffer[..n]);
+        println!("SERVER SAYS: {}", message);
+        line_buffer.clear();
     }
     Ok(())
 }
@@ -154,3 +142,4 @@ async fn main() -> io::Result<()> {
         _ => Ok(()),
     }
 }
+
