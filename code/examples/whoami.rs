@@ -38,7 +38,8 @@ async fn main() -> io::Result<()> {
     while whoami.is_none() {
         let (header,body) = client.recv().await?;
         if header.req_no == -req_no {
-            whoami = Some(asyncrpc::parse_error::<asyncrpc::WhoAmI>(&(header,body))?) 
+            let parsed = client.parse_whoami(&header,&body)?;
+            whoami = Some(parsed); 
         }
     }
     client.close().await?;

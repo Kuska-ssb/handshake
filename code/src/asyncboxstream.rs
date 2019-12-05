@@ -51,7 +51,6 @@ enum HeaderType {
     Goodbye,
 }
 
-
 #[derive(Debug)]
 pub struct Header {
     body_len: usize,
@@ -366,11 +365,6 @@ where
         self.plain_len  > 0 || self.cipher.len() > 0
     }
 }
-
-
-
-
-
 
 impl<W> Write for AsyncBoxStreamWrite<W>
 where
