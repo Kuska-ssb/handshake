@@ -228,9 +228,8 @@ where
             this.cipher_len += data_readed_len;
 
             // it there's not enough for filling the buffer return pending
-            // it is supposed that another poll_read is will be triggered, and this will 
-            //   call this stream.poll_read and cx is going to attach to the underlying reader 
             if this.cipher_len < this.read_limit {
+                cx.waker().clone().wake();
                 return Poll::Pending;
             }
 
@@ -250,6 +249,7 @@ where
                             this.read_limit = MSG_HEADER_LEN + header.body_len;
                             debug!("  poll_read header_complete body_len={}",header.body_len);
                             this.status = RecvStatus::ExpectBody(header);
+                            cx.waker().clone().wake();
                             return Poll::Pending;        
                         } 
                         HeaderType::Goodbye => {
@@ -355,6 +355,7 @@ where
             self.cipher.skip(n);
         }
         if self.cipher.len() > 0  {
+            cx.waker().clone().wake();
             return Poll::Pending;
         }
 
@@ -466,6 +467,7 @@ where
             let polled_write = Pin::new(&mut this.stream).poll_write(cx,&tmp_cipher[this.goodbye_off..]);
             this.goodbye_off += futures::ready!(polled_write)?;
             if this.goodbye_off < MSG_HEADER_LEN {
+                cx.waker().clone().wake();
                 return Poll::Pending 
             }
         }
@@ -526,7 +528,6 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &[u8]) -> io::Result
         ));
     }
     let secret_header = &buf[..MSG_HEADER_LEN];
-    debug!("ready to decript encrypted header data: {}", hex::encode(&secret_header));
     match secretbox::open(secret_header, &key_nonce.nonce, &key_nonce.key) {
         Ok(h) => {
             key_nonce.increment_be_inplace();

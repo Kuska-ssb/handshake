@@ -9,16 +9,25 @@ use async_std::net::TcpStream;
 
 use code::config::{IdentitySecret,ssb_net_id};
 use code::asynchandshake::AsyncHandshake;
-use code::asyncrpc::{Header};
-use code::asyncrpc::RequestNo;
-use code::asyncrpc::Client;
-
+use code::asyncrpc::{Header,RequestNo,Client,CreateHistoryStreamArgs};
 
 async fn wait_msg<R:Read+Unpin,W:Write+Unpin> (client: &mut Client<R,W>, req_no : RequestNo) -> io::Result<(Header,Vec<u8>)> {
     loop {
         let (header,body) = client.recv().await?;
         if header.req_no == req_no {
             return Ok((header,body))
+        }
+    }
+}
+async fn read_all_until_eof<R:Read+Unpin,W:Write+Unpin> (client: &mut Client<R,W>, req_no : RequestNo) -> io::Result<()> {
+    loop {
+        let (header,body) = client.recv().await?;
+        if header.req_no == req_no {
+            println!("{}",String::from_utf8_lossy(&body));
+            if header.is_end_or_error {
+                println!("STREAM FINISHED");
+                return Ok(())
+            }
         }
     }
 }
@@ -78,6 +87,25 @@ async fn main() -> io::Result<()> {
                 let (h,b) = wait_msg(&mut client, -req_id).await?;
                 let msg = client.parse_get(&h,&b)?;
                 println!("reponse: {:?}",msg);
+            }
+            ("history",2) => {
+
+                let feed_id = if args[1] == "0" {
+                    "@N/vWpVVdD1e8IbACUQE4EVGL6+aodQfbQZ8ByC+k79s=.ed25519".to_string()
+                } else {
+                    args[1].clone()
+                };
+
+                let args = CreateHistoryStreamArgs {
+                    id     : &feed_id,
+                    seq    : Some(1),
+                    live   : None,    
+                    keys   : None,
+                    values : None,
+                    limit  : None,
+                };
+                let req_id = client.send_create_history_stream(&args).await?;
+                read_all_until_eof(&mut client, -req_id).await?;
             }
             _ => println!("unknown command {}",line_buffer),
         }

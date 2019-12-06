@@ -19,16 +19,17 @@ pub enum BodyType {
     JSON,
 }
 
+#[derive(Debug,PartialEq)]
 pub enum RpcType {
     Async,
     Source,
 }
 
 impl RpcType {
-    pub fn as_str(&self) -> &'static str {
+    pub fn rpc_id(&self) -> &'static str {
         match self {
-            Async => "async",
-            Source => "source",
+            RpcType::Async => "async",
+            RpcType::Source => "source",
         }
     }
 }
@@ -104,6 +105,84 @@ impl Header {
 
 // WhoAmI ---------------------------------------
 
+// https://github.com/ssbc/ssb-db/blob/master/api.md
+#[derive(Debug,Serialize)]
+pub struct CreateFeedStreamArgs<'a> {
+    /// live (boolean, default: false): Keep the stream open and emit new messages as they are received
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live : Option<bool>,
+    
+    /// gt (greater than), gte (greater than or equal) define the lower bound of the range to be streamed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gt : Option<&'a str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gte : Option<&'a str>,
+
+    /// lt (less than), lte (less than or equal) define the higher bound of the range to be streamed. Only key/value pairs where the key is less than (or equal to) this option will be included in the range. When reverse=true the order will be reversed, but the records streamed will be the same.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lt : Option<&'a str>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lte : Option<&'a str>,
+
+    /// reverse (boolean, default: false): a boolean, set true and the stream output will be reversed. Beware that due to the way LevelDB works, a reverse seek will be slower than a forward seek.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverse : Option<bool>,
+
+    /// keys (boolean, default: true): whether the data event should contain keys. If set to true and values set to false then data events will simply be keys, rather than objects with a key property.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keys : Option<bool>,
+
+    /// values (boolean, default: true): whether the data event should contain values. If set to true and keys set to false then data events will simply be values, rather than objects with a value property.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values : Option<bool>,
+
+    /// limit (number, default: -1): limit the number of results collected by this stream. This number represents a maximum number of results and may not be reached if you get to the end of the data first. A value of -1 means there is no limit. When reverse=true the highest keys will be returned instead of the lowest keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit : Option<u64>,
+
+    /// fillCache (boolean, default: false): wheather LevelDB's LRU-cache should be filled with data read.
+    #[serde(rename = "fillCache")] 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fill_cache : Option<bool>,
+    
+    /// keyEncoding / valueEncoding (string): the encoding applied to each read piece of data.
+    #[serde(rename = "keyEncoding")] 
+    pub key_encoding : &'a str,
+
+    #[serde(rename = "valueEncoding")] 
+    pub value_encoding : &'a str,
+}
+
+#[derive(Debug,Serialize)]
+pub struct CreateHistoryStreamArgs<'a> {
+ 
+    // id (FeedID, required): The id of the feed to fetch.
+    pub id : &'a str,
+
+    /// (number, default: 0): If seq > 0, then only stream messages with sequence numbers greater than seq.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seq : Option<u64>,  
+
+    /// live (boolean, default: false): Keep the stream open and emit new messages as they are received
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live : Option<bool>,
+    
+    /// keys (boolean, default: true): whether the data event should contain keys. If set to true and values set to false then data events will simply be keys, rather than objects with a key property.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keys : Option<bool>,
+
+    /// values (boolean, default: true): whether the data event should contain values. If set to true and keys set to false then data events will simply be values, rather than objects with a value property.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values : Option<bool>,
+
+    /// limit (number, default: -1): limit the number of results collected by this stream. This number represents a maximum number of results and may not be reached if you get to the end of the data first. A value of -1 means there is no limit. When reverse=true the highest keys will be returned instead of the lowest keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit : Option<u64>,
+
+}
+
 #[derive(Debug,Deserialize)]
 pub struct WhoAmI {
     pub id : String,
@@ -148,7 +227,7 @@ pub struct Client<R : io::Read + Unpin, W : io::Write + Unpin> {
 }
 
 
-fn parse<'a,T:serde::Deserialize<'a>>(header: &'a Header, body : &'a Vec<u8>) -> Result<T,io::Error> {
+fn parse_json<'a,T:serde::Deserialize<'a>>(header: &'a Header, body : &'a Vec<u8>) -> Result<T,io::Error> {
     if header.is_end_or_error {
         let error : ErrorRes = serde_json::from_slice(&body[..]).map_err(to_ioerr)?;
         Err(to_ioerr(format!("{:?}",error)))
@@ -164,20 +243,31 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> Client<R,W> {
         Client { box_reader, box_writer, req_no : 1 }
     }
 
+    pub async fn recv(&mut self) -> Result<(Header,Vec<u8>),io::Error> {
+
+        let mut rpc_header_raw = [0u8;9];
+        self.box_reader.read_exact(&mut rpc_header_raw[..]).await?;
+        let rpc_header = Header::from_slice(&rpc_header_raw[..])?;
+
+        let mut rpc_body : Vec<u8> = vec![0;rpc_header.body_len as usize];
+        self.box_reader.read_exact(&mut rpc_body[..]).await?;
+
+        Ok((rpc_header,rpc_body))
+    }
+
     async fn send<T:serde::Serialize>(&mut self, req_no : RequestNo, name : &[&str], rpc_type: RpcType, args :&T) -> Result<RequestNo,io::Error>{
+
         let mut body = String::from("{\"name\":");
         body.push_str(&serde_json::to_string(&name).map_err(to_ioerr)?);
         body.push_str(",\"type\":\"");
-        body.push_str(rpc_type.as_str());
-        body.push_str("\",\"args\":");
+        body.push_str(rpc_type.rpc_id());
+        body.push_str("\",\"args\":[");
         body.push_str(&serde_json::to_string(&args).map_err(to_ioerr)?);
-        body.push_str("}");
-
-        debug!("RPC {}",body);
+        body.push_str("]}");
 
         let rpc_header = Header {
             req_no,
-            is_stream : false,
+            is_stream : rpc_type == RpcType::Source,
             is_end_or_error : false,
             body_type : BodyType::JSON,
             body_len : body.len() as u32,
@@ -211,7 +301,6 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> Client<R,W> {
     // whoami: sync
     // Get information about the current ssb-server user.
     pub async fn send_whoami(&mut self) -> Result<RequestNo,io::Error> {
-
         self.req_no += 1;
         let args : [&str;0] = [];         
         self.send(self.req_no,&["whoami"],RpcType::Async,&args).await?;
@@ -220,13 +309,12 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> Client<R,W> {
         Ok(self.req_no)
     }
     pub fn parse_whoami(&self, header: &Header, body: &Vec<u8>) -> Result<WhoAmI,io::Error> {
-        parse::<WhoAmI>(&header,&body)
+        parse_json::<WhoAmI>(&header,&body)
     }
 
     // get: async
     // Get a message by its hash-id. (sould start with %)
     pub async fn send_get(&mut self, msg_id : &str) -> Result<RequestNo,io::Error> {
-
         self.req_no += 1;
         let args : [&str;1] = [ msg_id ];         
         self.send(self.req_no,&["get"],RpcType::Async,&args).await?;
@@ -235,21 +323,18 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> Client<R,W> {
         Ok(self.req_no)
     }
     pub fn parse_get(&self, header: &Header, body: &Vec<u8>) -> Result<Message,io::Error> {
-        parse::<Message>(&header,&body)
+        parse_json::<Message>(&header,&body)
     }
     
-    pub async fn recv(&mut self) -> Result<(Header,Vec<u8>),io::Error> {
+    // createFeedStream: source
+    // (feed) Fetch messages ordered by their claimed timestamps.
+    pub async fn send_create_history_stream<'a>(&mut self, args : &'a CreateHistoryStreamArgs<'a>) -> Result<RequestNo,io::Error> {
+        self.req_no += 1;
+        self.send(self.req_no,&["createHistoryStream"],RpcType::Source,&args).await?;
+        self.box_writer.flush().await?;
 
-        let mut rpc_header_raw = [0u8;9];
-        self.box_reader.read_exact(&mut rpc_header_raw[..]).await?;
-        let rpc_header = Header::from_slice(&rpc_header_raw[..])?;
-
-        let mut rpc_body : Vec<u8> = vec![0;rpc_header.body_len as usize];
-        self.box_reader.read_exact(&mut rpc_body[..]).await?;
-
-        Ok((rpc_header,rpc_body))
+        Ok(self.req_no)
     }
-
 }
 
 mod test {
