@@ -2,29 +2,55 @@ extern crate base64;
 extern crate code;
 extern crate crossbeam;
 
+use std::fmt::Debug;
+
 use async_std::io;
 use async_std::io::{Read,Write};
-use async_std::prelude::*;
 use async_std::net::TcpStream;
 
 use code::config::{IdentitySecret,ssb_net_id};
 use code::asynchandshake::AsyncHandshake;
-use code::asyncrpc::{Header,RequestNo,Client,CreateHistoryStreamArgs};
+use code::asyncrpc::{Header,RequestNo,RpcClient};
+use code::asyncapi::*;
 
-async fn wait_msg<R:Read+Unpin,W:Write+Unpin> (client: &mut Client<R,W>, req_no : RequestNo) -> io::Result<(Header,Vec<u8>)> {
+
+async fn print_async<'a,R,W,T,F> (client: &mut ApiClient<R,W>, req_no : RequestNo, f : F) -> io::Result<()>
+where
+    R: Read+Unpin,
+    W: Write+Unpin,
+    F: Fn(&Header,&Vec<u8>)->io::Result<T>,
+    T: Debug+serde::Deserialize<'a>
+{
     loop {
-        let (header,body) = client.recv().await?;
+        let (header,body) = client.rpc().recv().await?;
         if header.req_no == req_no {
-            return Ok((header,body))
+            match f(&header,&body) {
+                Ok(res) =>  println!("{:?}",res), 
+                Err(err) => println!("*failed* {:?}",err)
+            }
+            break;
         }
     }
+    Ok(())
 }
-async fn read_all_until_eof<R:Read+Unpin,W:Write+Unpin> (client: &mut Client<R,W>, req_no : RequestNo) -> io::Result<()> {
+
+async fn print_source_until_eof<'a,R,W,T,F> (client: &mut ApiClient<R,W>, req_no : RequestNo, f : F) -> io::Result<()>
+where
+    R: Read+Unpin,
+    W: Write+Unpin,
+    F: Fn(&Header,&Vec<u8>)->io::Result<T>,
+    T: Debug+serde::Deserialize<'a>
+{
     loop {
-        let (header,body) = client.recv().await?;
+        let (header,body) = client.rpc().recv().await?;
         if header.req_no == req_no {
-            println!("{}",String::from_utf8_lossy(&body));
-            if header.is_end_or_error {
+            if !header.is_end_or_error {
+                println!("{}",String::from_utf8_lossy(&body));
+                match f(&header,&body) {
+                    Ok(res) =>  println!("{:?}",res), 
+                    Err(err) => { println!("{:?}",err); }
+                }
+            } else {
                 println!("STREAM FINISHED");
                 return Ok(())
             }
@@ -54,7 +80,7 @@ async fn main() -> io::Result<()> {
     let (box_stream_read, box_stream_write) =
         handshake.to_box_stream(0x8000).split_read_write();
 
-    let mut client = Client::new(box_stream_read, box_stream_write);
+    let mut client = ApiClient::new(RpcClient::new(box_stream_read, box_stream_write));
 
     let mut line_buffer = String::new();
     while let Ok(_) = std::io::stdin().read_line(&mut line_buffer) {
@@ -67,15 +93,12 @@ async fn main() -> io::Result<()> {
 
         match (args[0].as_str(), args.len()) {
             ("exit",1) => {
-                client.close().await?;
+                client.rpc().close().await?;
                 break;
             }
             ("whoami",1) => {
                 let req_id = client.send_whoami().await?;
-                let (h,b) = wait_msg(&mut client, -req_id).await?;
-                let whoami = client.parse_whoami(&h,&b)?;
-
-                println!("reponse: {}",whoami.id);
+                print_async(&mut client,-req_id,parse_whoami).await?;
             }
             ("get",2) => {
                 let msg_id = if args[1] == "0" {
@@ -84,28 +107,27 @@ async fn main() -> io::Result<()> {
                     args[1].clone()
                 };
                 let req_id = client.send_get(&msg_id).await?;
-                let (h,b) = wait_msg(&mut client, -req_id).await?;
-                let msg = client.parse_get(&h,&b)?;
-                println!("reponse: {:?}",msg);
+                print_async(&mut client,-req_id,parse_message).await?;
             }
-            ("history",2) => {
-
-                let feed_id = if args[1] == "0" {
-                    "@N/vWpVVdD1e8IbACUQE4EVGL6+aodQfbQZ8ByC+k79s=.ed25519".to_string()
+            ("user",2) => {
+                let user_id = if args[1] == "0" {
+                    "@ZFWw+UclcUgYi081/C8lhgH+KQ9s7YJRoOYGnzxW/JQ=.ed25519".to_string()
                 } else {
                     args[1].clone()
                 };
 
-                let args = CreateHistoryStreamArgs {
-                    id     : &feed_id,
-                    seq    : Some(1),
-                    live   : None,    
-                    keys   : None,
-                    values : None,
-                    limit  : None,
-                };
+                let args = CreateHistoryStreamArgs::new(&user_id);
                 let req_id = client.send_create_history_stream(&args).await?;
-                read_all_until_eof(&mut client, -req_id).await?;
+                print_source_until_eof(&mut client, -req_id, parse_feed).await?;
+            }
+            ("feed",1) => {
+                let args = CreateStreamArgs::default();
+                let req_id = client.send_create_feed_stream(&args).await?;
+                print_source_until_eof(&mut client, -req_id, parse_feed).await?;
+            }
+            ("latest",1) => {
+                let req_id = client.send_latest().await?;
+                print_source_until_eof(&mut client, -req_id, parse_latest).await?;
             }
             _ => println!("unknown command {}",line_buffer),
         }

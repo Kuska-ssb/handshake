@@ -7,7 +7,8 @@ use async_std::net::{TcpStream,Shutdown};
 
 use code::config::{IdentitySecret,ssb_net_id};
 use code::asynchandshake::AsyncHandshake;
-use code::asyncrpc;
+use code::asyncrpc::RpcClient;
+use code::asyncapi::*;
 
 #[async_std::main]
 async fn main() -> io::Result<()> {
@@ -31,18 +32,18 @@ async fn main() -> io::Result<()> {
     let (box_stream_read, box_stream_write) =
         handshake.to_box_stream(0x8000).split_read_write();
 
-    let mut client = asyncrpc::Client::new(box_stream_read, box_stream_write);
+    let mut client = ApiClient::new(RpcClient::new(box_stream_read, box_stream_write));
     let req_no = client.send_whoami().await?;
 
     let mut whoami = None;
     while whoami.is_none() {
-        let (header,body) = client.recv().await?;
+        let (header,body) = client.rpc().recv().await?;
         if header.req_no == -req_no {
-            let parsed = client.parse_whoami(&header,&body)?;
+            let parsed = parse_whoami(&header,&body)?;
             whoami = Some(parsed); 
         }
     }
-    client.close().await?;
+    client.rpc().close().await?;
     
     println!("{}", whoami.unwrap().id);
     Ok(())
