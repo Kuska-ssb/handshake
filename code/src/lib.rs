@@ -11,6 +11,8 @@ pub mod asyncboxstream;
 pub mod asynchandshake;
 pub mod asyncrpc;
 pub mod asyncapi;
+pub mod sodiumutil;
+pub mod asyncutil;
 
 pub mod boxstream;
 pub mod handshake;

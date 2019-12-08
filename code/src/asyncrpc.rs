@@ -1,5 +1,7 @@
 use async_std::io;
 use async_std::prelude::*;
+use super::asyncutil::*;
+
 use crate::asyncboxstream::{
     AsyncBoxStreamRead,
     AsyncBoxStreamWrite
@@ -12,10 +14,6 @@ const HEADER_SIZE : usize = 9;
 const RPC_HEADER_STREAM_FLAG : u8 = 1 << 3;
 const RPC_HEADER_END_OR_ERROR_FLAG : u8 = 1 << 2;
 const RPC_HEADER_BODY_TYPE_MASK : u8 = 0b11;
-
-fn to_ioerr<T: ToString>(err: T) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err.to_string())
-}
 
 #[derive(Debug,PartialEq)]
 pub enum BodyType {
@@ -114,7 +112,6 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> RpcClient<R,W> {
     }
 
     pub async fn recv(&mut self) -> Result<(Header,Vec<u8>),io::Error> {
- 
         let mut rpc_header_raw = [0u8;9];
         self.box_reader.read_exact(&mut rpc_header_raw[..]).await?;
         let rpc_header = Header::from_slice(&rpc_header_raw[..])?;
@@ -136,9 +133,6 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> RpcClient<R,W> {
         body.push_str("\",\"args\":[");
         body.push_str(&serde_json::to_string(&args).map_err(to_ioerr)?);
         body.push_str("]}");
-
-        println!("body {}",body);
-
 
         let rpc_header = Header {
             req_no : self.req_no,

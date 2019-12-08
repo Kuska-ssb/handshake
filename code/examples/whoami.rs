@@ -3,7 +3,7 @@ extern crate code;
 extern crate crossbeam;
 
 use std::io;
-use async_std::net::{TcpStream,Shutdown};
+use async_std::net::{TcpStream};
 
 use code::config::{IdentitySecret,ssb_net_id};
 use code::asynchandshake::AsyncHandshake;
