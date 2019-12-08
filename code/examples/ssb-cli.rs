@@ -8,11 +8,9 @@ use async_std::io;
 use async_std::io::{Read,Write};
 use async_std::net::TcpStream;
 
-use code::config::{IdentitySecret,ssb_net_id};
-use code::asynchandshake::AsyncHandshake;
-use code::asyncrpc::{Header,RequestNo,RpcClient};
-use code::asyncapi::*;
-
+use code::pasync::rpc::{Header,RequestNo,RpcClient};
+use code::pasync::handbox::Handshake;
+use code::pasync::patchwork::*;
 
 async fn print_async<'a,R,W,T,F> (client: &mut ApiClient<R,W>, req_no : RequestNo, f : F) -> io::Result<()>
 where
@@ -69,7 +67,7 @@ async fn main() -> io::Result<()> {
 
     let socket = TcpStream::connect("127.0.0.1:8008").await?;
 
-    let handshake = AsyncHandshake::new_client(&socket, &socket, ssb_net_id(), pk, sk)
+    let handshake = Handshake::new_client(&socket, &socket, ssb_net_id(), pk, sk)
         .send_client_hello().await?
         .recv_server_hello().await?
         .send_client_auth(pk).await?

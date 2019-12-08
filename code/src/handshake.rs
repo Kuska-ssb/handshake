@@ -1,6 +1,6 @@
 extern crate sodiumoxide;
 
-use crate::boxstream::BoxStream;
+use super::boxstream::BoxStream;
 
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 use std::{io, io::Read, io::Result, io::Write};

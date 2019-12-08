@@ -1,6 +1,6 @@
 extern crate sodiumoxide;
 
-use crate::asyncboxstream::AsyncBoxStream;
+use super::boxstream::BoxStream;
 
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 use async_std::{
@@ -27,7 +27,7 @@ pub struct SharedSecret {
 }
 
 #[derive(Debug)]
-pub struct AsyncHandshakeBase<R, W> {
+pub struct HandshakeBase<R, W> {
     read_stream: R,
     write_stream: W,
     net_id: auth::Key,
@@ -38,8 +38,8 @@ pub struct AsyncHandshakeBase<R, W> {
 }
 
 #[derive(Debug)]
-pub struct AsyncHandshake<R, W, S: State> {
-    pub base: AsyncHandshakeBase<R, W>,
+pub struct Handshake<R, W, S: State> {
+    pub base: HandshakeBase<R, W>,
     pub state: S,
 }
 
@@ -121,19 +121,19 @@ fn scalarmult_error_new(fn_name: &str, a: &str, b: &str) -> io::Error {
 }
 
 // Client
-impl<R, W> AsyncHandshake<R, W, SendClientHello> {
+impl<R, W> Handshake<R, W, SendClientHello> {
     pub fn new_client(
         read_stream: R,
         write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> AsyncHandshake<R, W, SendClientHello> {
+    ) -> Handshake<R, W, SendClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
         let state = SendClientHello;
-        let base = AsyncHandshakeBase {
+        let base = HandshakeBase {
             read_stream,
             write_stream,
             net_id,
@@ -142,12 +142,12 @@ impl<R, W> AsyncHandshake<R, W, SendClientHello> {
             ephemeral_pk,
             ephemeral_sk,
         };
-        AsyncHandshake { base, state }
+        Handshake { base, state }
     }
 }
 
-impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendClientHello> {
-    pub async fn send_client_hello(mut self) -> Result<AsyncHandshake<R, W, RecvServerHello>> {
+impl<R, W: Write+Unpin> Handshake<R, W, SendClientHello> {
+    pub async fn send_client_hello(mut self) -> Result<Handshake<R, W, RecvServerHello>> {
         let send = [
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
             self.base.ephemeral_pk.as_ref(),
@@ -156,15 +156,15 @@ impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendClientHello> {
         self.base.write_stream.write_all(&send).await?;
         self.base.write_stream.flush().await?;
         let state = RecvServerHello;
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state,
         })
     }
 }
 
-impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvServerHello> {
-    pub async fn recv_server_hello(mut self) -> Result<AsyncHandshake<R, W, SendClientAuth>> {
+impl<R: Read+Unpin, W> Handshake<R, W, RecvServerHello> {
+    pub async fn recv_server_hello(mut self) -> Result<Handshake<R, W, SendClientAuth>> {
         let mut recv = [0; 64];
         self.base.read_stream.read_exact(&mut recv).await?;
         let server_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
@@ -176,7 +176,7 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvServerHello> {
         ) {
             return Err(error_new("auth::verify failed in recv_server_hello"));
         }
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state: SendClientAuth {
                 server_ephemeral_pk,
@@ -185,11 +185,11 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvServerHello> {
     }
 }
 
-impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendClientAuth> {
+impl<R, W: Write+Unpin> Handshake<R, W, SendClientAuth> {
     pub async fn send_client_auth(
         mut self,
         server_pk: ed25519::PublicKey,
-    ) -> Result<AsyncHandshake<R, W, RecvServerAccept>> {
+    ) -> Result<Handshake<R, W, RecvServerAccept>> {
         let fn_error = |a, b| Err(scalarmult_error_new("send_client_auth", a, b));
         let shared_secret = SharedSecret {
             ab: curve25519::scalarmult(&self.base.ephemeral_sk, &self.state.server_ephemeral_pk)
@@ -228,7 +228,7 @@ impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendClientAuth> {
         );
         self.base.write_stream.write_all(&send).await?;
         self.base.write_stream.flush().await?;
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state: RecvServerAccept {
                 server_pk: server_pk,
@@ -240,8 +240,8 @@ impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendClientAuth> {
     }
 }
 
-impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvServerAccept> {
-    pub async fn recv_server_accept(mut self) -> Result<AsyncHandshake<R, W, Complete>> {
+impl<R: Read+Unpin, W> Handshake<R, W, RecvServerAccept> {
+    pub async fn recv_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
         let mut recv_enc = [0; 80];
         self.base.read_stream.read_exact(&mut recv_enc).await?;
         let recv = secretbox::open(
@@ -279,7 +279,7 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvServerAccept> {
                 "ed25519::verify_detached failed in recv_server_accept",
             ));
         }
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state: Complete {
                 peer_pk: self.state.server_pk,
@@ -291,19 +291,19 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvServerAccept> {
 }
 
 // Server
-impl<R, W> AsyncHandshake<R, W, RecvClientHello> {
+impl<R, W> Handshake<R, W, RecvClientHello> {
     pub fn new_server(
         read_stream: R,
         write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> AsyncHandshake<R, W, RecvClientHello> {
+    ) -> Handshake<R, W, RecvClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
-        AsyncHandshake {
-            base: AsyncHandshakeBase {
+        Handshake {
+            base: HandshakeBase {
                 read_stream,
                 write_stream,
                 net_id,
@@ -317,8 +317,8 @@ impl<R, W> AsyncHandshake<R, W, RecvClientHello> {
     }
 }
 
-impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvClientHello> {
-    pub async fn recv_client_hello(mut self) -> Result<AsyncHandshake<R, W, SendServerHello>> {
+impl<R: Read+Unpin, W> Handshake<R, W, RecvClientHello> {
+    pub async fn recv_client_hello(mut self) -> Result<Handshake<R, W, SendServerHello>> {
         let mut recv = [0; 64];
         self.base.read_stream.read_exact(&mut recv).await?;
         let client_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
@@ -337,7 +337,7 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvClientHello> {
             aB: curve25519::scalarmult(&self.base.sk.to_curve25519(), &client_ephemeral_pk)
                 .or(fn_error("sk", "client_ephemeral_pk"))?,
         };
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state: SendServerHello {
                 client_ephemeral_pk,
@@ -347,8 +347,8 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvClientHello> {
     }
 }
 
-impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendServerHello> {
-    pub async fn send_server_hello(mut self) -> Result<AsyncHandshake<R, W, RecvClientAuth>> {
+impl<R, W: Write+Unpin> Handshake<R, W, SendServerHello> {
+    pub async fn send_server_hello(mut self) -> Result<Handshake<R, W, RecvClientAuth>> {
         let send = [
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
             self.base.ephemeral_pk.as_ref(),
@@ -356,7 +356,7 @@ impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendServerHello> {
         .concat();
         self.base.write_stream.write_all(&send).await?;
         self.base.write_stream.flush().await?;
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state: RecvClientAuth {
                 client_ephemeral_pk: self.state.client_ephemeral_pk,
@@ -366,8 +366,8 @@ impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendServerHello> {
     }
 }
 
-impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvClientAuth> {
-    pub async fn recv_client_auth(mut self) -> Result<AsyncHandshake<R, W, SendServerAccept>> {
+impl<R: Read+Unpin, W> Handshake<R, W, RecvClientAuth> {
+    pub async fn recv_client_auth(mut self) -> Result<Handshake<R, W, SendServerAccept>> {
         let mut recv_enc = [0; 112];
         self.base.read_stream.read_exact(&mut recv_enc).await?;
         let recv = secretbox::open(
@@ -409,7 +409,7 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvClientAuth> {
             Ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_pk.to_curve25519())
                 .or(fn_error("ephemeral_sk", "client_pk"))?,
         };
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state: SendServerAccept {
                 client_pk,
@@ -421,8 +421,8 @@ impl<R: Read+Unpin, W> AsyncHandshake<R, W, RecvClientAuth> {
     }
 }
 
-impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendServerAccept> {
-    pub async fn send_server_accept(mut self) -> Result<AsyncHandshake<R, W, Complete>> {
+impl<R, W: Write+Unpin> Handshake<R, W, SendServerAccept> {
+    pub async fn send_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
         let sig = ed25519::sign_detached(
             &[
                 self.base.net_id.as_ref(),
@@ -451,7 +451,7 @@ impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendServerAccept> {
         );
         self.base.write_stream.write_all(&send).await?;
         self.base.write_stream.flush().await?;
-        Ok(AsyncHandshake {
+        Ok(Handshake {
             base: self.base,
             state: Complete {
                 peer_pk: self.state.client_pk,
@@ -462,9 +462,9 @@ impl<R, W: Write+Unpin> AsyncHandshake<R, W, SendServerAccept> {
     }
 }
 
-impl<R:Read+Unpin, W:Write+Unpin> AsyncHandshake<R, W, Complete> {
-    pub fn to_box_stream(self, recv_buf_len: usize) -> AsyncBoxStream<R, W> {
-        AsyncBoxStream::new(
+impl<R:Read+Unpin, W:Write+Unpin> Handshake<R, W, Complete> {
+    pub fn to_box_stream(self, recv_buf_len: usize) -> BoxStream<R, W> {
+        BoxStream::new(
             self.base.read_stream,
             self.base.write_stream,
             recv_buf_len,

@@ -2,7 +2,7 @@ use sodiumoxide::crypto::sign::ed25519;
 use std::io;
 use std::string::ToString;
 use sodiumoxide::crypto::auth;
-use super::sodiumutil::ToSodiumObject;
+use crate::pasync::crypto::ToSodiumObject;
 
 const CURVE_ED25519 : &str = "ed25519";
 pub const SSB_NET_ID : &str = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";

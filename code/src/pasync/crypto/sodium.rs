@@ -1,8 +1,9 @@
 use sodiumoxide::crypto::sign::ed25519;
 use sodiumoxide::crypto::hash::sha256;
-use super::asyncutil::to_ioerr;
 use async_std::io;
 use base64;
+
+use crate::pasync::util::to_ioerr;
 
 const CURVE_ED25519_SUFFIX : &str = ".ed25519";
 const ED25519_SIGNATURE_SUFFIX : &str = ".sig.ed25519";

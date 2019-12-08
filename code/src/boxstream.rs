@@ -1,7 +1,7 @@
 extern crate log;
 extern crate sodiumoxide;
 
-use crate::handshake::SharedSecret;
+use super::handshake::SharedSecret;
 use log::debug;
 
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};

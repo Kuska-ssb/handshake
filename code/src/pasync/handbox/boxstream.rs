@@ -1,9 +1,10 @@
 extern crate log;
 extern crate sodiumoxide;
 
-use crate::asynchandshake::SharedSecret;
+use super::handshake::SharedSecret;
+use crate::pasync::util::CircularBuffer;
 use log::debug;
-use crate::buffer::CircularBuffer;
+
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 use std::{cmp}; //, pin::Pin};
 use async_std::{
@@ -14,11 +15,11 @@ use async_std::{
 };
 
 // Length of encrypted body (with MAC detached)
-pub const MSG_BODY_MAX_LEN: usize = 4096;
+const MSG_BODY_MAX_LEN: usize = 4096;
 // Length of decrypted header (body_len || enc_body_mac)
-pub const MSG_HEADER_DEC_LEN: usize = 18;
+const MSG_HEADER_DEC_LEN: usize = 18;
 // Length of encrypted header (with MAC prefixed)
-pub const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
+const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
 
 const GOODBYE : [u8;18] = [0u8;18];
 
@@ -75,12 +76,12 @@ impl Header {
     }
 }
 
-pub struct AsyncBoxStream<R:Read, W:Write> {
-    reader: AsyncBoxStreamRead<R>,
-    writer: AsyncBoxStreamWrite<W>,
+pub struct BoxStream<R:Read, W:Write> {
+    reader: BoxStreamRead<R>,
+    writer: BoxStreamWrite<W>,
 }
 
-pub struct AsyncBoxStreamRead<R> {
+pub struct BoxStreamRead<R> {
     stream: R,
     key_nonce: KeyNonce,
     plain  : Box<[u8]>,
@@ -99,7 +100,7 @@ pub enum Status {
     Closed,
 }
 
-pub struct AsyncBoxStreamWrite<W> {
+pub struct BoxStreamWrite<W> {
     stream: W,
     key_nonce: KeyNonce,
     cipher: CircularBuffer,
@@ -109,7 +110,7 @@ pub struct AsyncBoxStreamWrite<W> {
     status : Status,
 }
 
-impl<R:Read+Unpin, W:Write+Unpin> AsyncBoxStream<R, W> {
+impl<R:Read+Unpin, W:Write+Unpin> BoxStream<R, W> {
     pub fn new(
         read_stream: R,
         write_stream: W,
@@ -161,16 +162,16 @@ impl<R:Read+Unpin, W:Write+Unpin> AsyncBoxStream<R, W> {
             hex::encode(send_key_nonce.nonce.as_ref())
         );
         Self {
-            reader : AsyncBoxStreamRead::new(read_stream, recv_key_nonce, capacity),
-            writer : AsyncBoxStreamWrite::new(write_stream, send_key_nonce, capacity),
+            reader : BoxStreamRead::new(read_stream, recv_key_nonce, capacity),
+            writer : BoxStreamWrite::new(write_stream, send_key_nonce, capacity),
         }
     }
 }
 
 
-impl<R:Read, W:Write> AsyncBoxStream<R, W> {
-    pub fn split_read_write(self) -> (AsyncBoxStreamRead<R>, AsyncBoxStreamWrite<W>) {
-        let AsyncBoxStream { reader, writer } = self;
+impl<R:Read, W:Write> BoxStream<R, W> {
+    pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
+        let BoxStream { reader, writer } = self;
         (reader, writer)
     }
 }
@@ -181,11 +182,11 @@ enum RecvStatus {
     ExpectBody(Header),
 }
 
-impl<R> AsyncBoxStreamRead<R> 
+impl<R> BoxStreamRead<R> 
 where
     R : Read+Unpin
 {
-    pub fn new(stream: R, key_nonce : KeyNonce, capacity: usize) -> AsyncBoxStreamRead<R> {
+    pub fn new(stream: R, key_nonce : KeyNonce, capacity: usize) -> BoxStreamRead<R> {
         Self {
             stream: stream,
             key_nonce: key_nonce,
@@ -200,7 +201,7 @@ where
     }
 }
 
-impl<R> Read for AsyncBoxStreamRead<R>
+impl<R> Read for BoxStreamRead<R>
 where
     R : Read+Unpin
 {
@@ -309,11 +310,11 @@ impl<W: Write + Unpin> Future for CloseFuture<'_, W> {
     }
 }
 
-impl<W> AsyncBoxStreamWrite<W>
+impl<W> BoxStreamWrite<W>
 where
     W : Write+Unpin
 {
-    pub fn new(stream: W, key_nonce : KeyNonce, capacity: usize) -> AsyncBoxStreamWrite<W> {
+    pub fn new(stream: W, key_nonce : KeyNonce, capacity: usize) -> BoxStreamWrite<W> {
         Self {
             stream: stream,
             status : Status::Open,
@@ -367,7 +368,7 @@ where
     }
 }
 
-impl<W> Write for AsyncBoxStreamWrite<W>
+impl<W> Write for BoxStreamWrite<W>
 where
     W : Write+Unpin
  {
@@ -590,7 +591,7 @@ mod test {
         };
 
         let stream = CircularBuffer::new(16384);
-        let mut writer = AsyncBoxStreamWrite::new(stream,send_key_nonce,16384);
+        let mut writer = BoxStreamWrite::new(stream,send_key_nonce,16384);
         
         writer.write_all(b"hola").await?;
         writer.write_all(b"antoni").await?;
@@ -599,8 +600,8 @@ mod test {
 
         writer.flush().await?;
         
-        let AsyncBoxStreamWrite { stream , .. } = writer;
-        let mut reader = AsyncBoxStreamRead::new(stream,recv_key_nonce,16384);
+        let BoxStreamWrite { stream , .. } = writer;
+        let mut reader = BoxStreamRead::new(stream,recv_key_nonce,16384);
         
         let mut holaantoni = [0u8;10];
         let mut sevens = [0u8;5000];
