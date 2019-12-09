@@ -32,6 +32,14 @@ fn to_ioerr<T: ToString>(err: T) -> io::Error {
 
 impl IdentitySecret {
 
+    pub fn new() -> IdentitySecret {
+        let (pk, sk) = ed25519::gen_keypair();
+        IdentitySecret {
+            pk, sk,
+            id  : format!("@{}.{}",base64::encode(&pk),CURVE_ED25519),
+        }
+    }
+
     pub fn from_local_config() -> io::Result<IdentitySecret> {
         if let Some(home_dir) = dirs::home_dir() {
             let local_key_file = format!("{}/.ssb/secret",home_dir.to_string_lossy());

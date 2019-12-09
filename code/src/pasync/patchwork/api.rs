@@ -4,7 +4,6 @@ use serde_json;
 use crate::pasync::rpc::{RpcClient, Header, RequestNo, RpcType};
 use crate::pasync::util::to_ioerr;
 use super::dto::{ErrorRes,Feed,Message,LatestUserMessage,WhoAmI};
-use super::integrity::verify_feed_integrity;
 
 // https://github.com/ssbc/ssb-db/blob/master/api.md
 #[derive(Debug, Serialize)]
@@ -219,8 +218,12 @@ pub fn parse_message(header: &Header, body: &Vec<u8>) -> Result<Message, io::Err
 }
 
 pub fn parse_feed(header: &Header, body: &Vec<u8>) -> Result<Feed, io::Error> {
-    verify_feed_integrity(&String::from_utf8_lossy(&body))?;
-    parse_json::<Feed>(&header, &body)
+    if header.is_end_or_error {
+        let error: ErrorRes = serde_json::from_slice(&body[..]).map_err(to_ioerr)?;
+        Err(to_ioerr(format!("{:?}", error)))
+    } else {
+        Feed::from_str(&String::from_utf8_lossy(&body))
+    }
 }
 
 pub fn parse_latest(header: &Header, body: &Vec<u8>) -> Result<LatestUserMessage, io::Error> {

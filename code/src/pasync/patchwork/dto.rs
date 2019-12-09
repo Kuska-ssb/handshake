@@ -184,7 +184,7 @@ pub struct FeedValue {
     pub sequence: u64,
     pub timestamp: f64,
     pub hash: SsbHashType,
-    pub content: FeedContent,
+    pub content: serde_json::Value,
     pub signature: SsbSignature,
 }
 
