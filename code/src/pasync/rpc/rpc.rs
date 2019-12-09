@@ -1,14 +1,19 @@
-use std::io;
-use std::io::{Read,Write};
-use crate::boxstream::{BoxStreamRead,BoxStreamWrite};
+use async_std::io;
+use async_std::prelude::*;
+use crate::pasync::util::to_ioerr;
+
+use crate::pasync::handbox::{
+    BoxStreamRead,
+    BoxStreamWrite
+};
+
+pub type RequestNo = i32;
+
+const HEADER_SIZE : usize = 9;
 
 const RPC_HEADER_STREAM_FLAG : u8 = 1 << 3;
 const RPC_HEADER_END_OR_ERROR_FLAG : u8 = 1 << 2;
 const RPC_HEADER_BODY_TYPE_MASK : u8 = 0b11;
-
-fn to_ioerr<T: ToString>(err: T) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, err.to_string())
-}
 
 #[derive(Debug,PartialEq)]
 pub enum BodyType {
@@ -18,8 +23,23 @@ pub enum BodyType {
 }
 
 #[derive(Debug,PartialEq)]
+pub enum RpcType {
+    Async,
+    Source,
+}
+
+impl RpcType {
+    pub fn rpc_id(&self) -> &'static str {
+        match self {
+            RpcType::Async => "async",
+            RpcType::Source => "source",
+        }
+    }
+}
+
+#[derive(Debug,PartialEq)]
 pub struct Header {
-    pub req_no : i32,
+    pub req_no : RequestNo,
     pub is_stream : bool,
     pub is_end_or_error : bool,
     pub body_type : BodyType,
@@ -27,12 +47,8 @@ pub struct Header {
 }
 
 impl Header {
-    pub fn size_encoded() -> usize {
-        return 9;
-    }
-
     pub fn from_slice(bytes: &[u8]) -> Result<Header,io::Error> {
-        if bytes.len() < Header::size_encoded() {
+        if bytes.len() < HEADER_SIZE {
             return Err(to_ioerr("header size too small"));
         }
 
@@ -83,89 +99,73 @@ impl Header {
     }
 }
 
-#[derive(Serialize)]
-struct WhoAmIReq {
-    name : &'static[&'static str],
-    args: Vec<String>,
-}
-
-#[derive(Deserialize)]
-pub struct WhoAmI {
-    pub id : String,
-}
-
-#[derive(Debug,Deserialize)]
-struct ErrorRes {
-    pub name : String,
-    pub message : String,
-    pub stack : String,
-}
-
-pub struct Client<R : io::Read, W : io::Write> {
+pub struct RpcClient<R : io::Read + Unpin, W : io::Write + Unpin> {
     box_reader : BoxStreamRead<R>,
     box_writer : BoxStreamWrite<W>,
-    req_no : i32,
+    req_no : RequestNo,
 }
 
-pub fn parse_error<'a,T:serde::Deserialize<'a>>(data :&'a (Header,Vec<u8>)) -> Result<T,io::Error> {
-    if data.0.is_end_or_error {
-        let error : ErrorRes = serde_json::from_slice(&data.1[..]).map_err(to_ioerr)?;
-        Err(to_ioerr(format!("{:?}",error)))
-    } else {
-        let res : T = serde_json::from_slice(&data.1[..]).map_err(to_ioerr)?;
-        Ok(res)
-    }
-}
+impl<R:io::Read+Unpin , W:io::Write+Unpin> RpcClient<R,W> {
 
-impl<R:io::Read , W:io::Write> Client<R,W> {
-
-    pub fn new(box_reader :BoxStreamRead<R>, box_writer :BoxStreamWrite<W>) -> Client<R,W> {
-        Client { box_reader, box_writer, req_no : 1 }
+    pub fn new(box_reader :BoxStreamRead<R>, box_writer :BoxStreamWrite<W>) -> RpcClient<R,W> {
+        RpcClient { box_reader, box_writer, req_no : 0 }
     }
 
-    fn send_json_sync<T:serde::Serialize>(&mut self,  body :&T) -> Result<i32,io::Error>{
-        let body_bytes = serde_json::to_vec(&body).map_err(to_ioerr)?;
+    pub async fn recv(&mut self) -> Result<(Header,Vec<u8>),io::Error> {
+        let mut rpc_header_raw = [0u8;9];
+        self.box_reader.read_exact(&mut rpc_header_raw[..]).await?;
+        let rpc_header = Header::from_slice(&rpc_header_raw[..])?;
 
-        self.req_no += 1;
+        let mut rpc_body : Vec<u8> = vec![0;rpc_header.body_len as usize];
+        self.box_reader.read_exact(&mut rpc_body[..]).await?;
+
+        Ok((rpc_header,rpc_body))
+    }
+
+    pub async fn send<T:serde::Serialize>(&mut self, name : &[&str], rpc_type: RpcType, args :&T) -> Result<RequestNo,io::Error>{
+
+        self.req_no+=1;
+
+        let mut body = String::from("{\"name\":");
+        body.push_str(&serde_json::to_string(&name).map_err(to_ioerr)?);
+        body.push_str(",\"type\":\"");
+        body.push_str(rpc_type.rpc_id());
+        body.push_str("\",\"args\":[");
+        body.push_str(&serde_json::to_string(&args).map_err(to_ioerr)?);
+        body.push_str("]}");
+
         let rpc_header = Header {
             req_no : self.req_no,
-            is_stream : false,
+            is_stream : rpc_type == RpcType::Source,
             is_end_or_error : false,
             body_type : BodyType::JSON,
-            body_len : body_bytes.len() as u32,
+            body_len : body.len() as u32,
         }.to_array();
 
-        self.box_writer.write_all(&rpc_header[..])?;
-        self.box_writer.write_all(&body_bytes[..])?;
+        self.box_writer.write_all(&rpc_header[..]).await?;
+        self.box_writer.write_all(body.as_bytes()).await?;
+        self.box_writer.flush().await?;
 
         Ok(self.req_no)
     }
 
-    pub fn send_whoami(&mut self) -> Result<i32,io::Error> {
-        let req = WhoAmIReq{
-            name : &["whoami"],
-            args : Vec::new(), 
-        };
-        self.send_json_sync(&req)
+    pub async fn send_cancel_stream(&mut self, req_no: RequestNo) -> Result<(),io::Error> {
+        let body_bytes = b"true";
+        
+        let rpc_header = Header {
+            req_no,
+            is_stream : true,
+            is_end_or_error : true,
+            body_type : BodyType::JSON,
+            body_len : body_bytes.len() as u32,
+        }.to_array();
+
+        self.box_writer.write_all(&rpc_header[..]).await?;
+        self.box_writer.write_all(&body_bytes[..]).await
     }
-    
-    pub fn recv(&mut self) -> Result<(Header,Vec<u8>),io::Error> {
 
-        let mut rpc_header_raw = [0u8;9];
-
-        while self.box_reader.read(&mut rpc_header_raw[..])? < rpc_header_raw.len() {
-            println!("reading more rpc header");
-        }
-        let rpc_header = Header::from_slice(&rpc_header_raw[..])?;
-
-        let mut rpc_body : Vec<u8> = Vec::with_capacity(rpc_header.body_len as usize);
-        rpc_body.resize(rpc_body.capacity(), 0);
-
-        while self.box_reader.read(&mut rpc_body[..])? < rpc_body.capacity() {
-            println!("reading more rpc body");
-        }
-
-        Ok((rpc_header,rpc_body))
+    pub async fn close(&mut self) -> Result<(),io::Error> {
+        self.box_writer.close().await
     }
 
 }
