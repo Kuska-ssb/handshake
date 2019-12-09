@@ -177,24 +177,6 @@ pub enum FeedContent {
     Typed(FeedTypedContent),
 }
 
-#[derive(Debug, Deserialize)]
-pub struct FeedValue {
-    pub previous: Option<SsbHash>,
-    pub author: SsbId,
-    pub sequence: u64,
-    pub timestamp: f64,
-    pub hash: SsbHashType,
-    pub content: serde_json::Value,
-    pub signature: SsbSignature,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Feed {
-    pub key: SsbHash,
-    pub value: FeedValue,
-    pub timestamp: f64,
-    pub rts: Option<f64>,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct LatestUserMessage {

@@ -3,7 +3,8 @@ use serde_json;
 
 use crate::pasync::rpc::{RpcClient, Header, RequestNo, RpcType};
 use crate::pasync::util::to_ioerr;
-use super::dto::{ErrorRes,Feed,Message,LatestUserMessage,WhoAmI};
+use super::dto::{ErrorRes,Message,LatestUserMessage,WhoAmI};
+use super::feed::Feed;
 
 // https://github.com/ssbc/ssb-db/blob/master/api.md
 #[derive(Debug, Serialize)]

@@ -5,8 +5,8 @@ use crate::pasync::patchwork::IdentitySecret;
 use sodiumoxide::crypto::{hash::sha256, sign::ed25519};
 use async_std::io;
 use serde_json::Value;
-use super::dto::{Feed, FeedValue};
 use std::time::SystemTime;
+use super::dto::{SsbHash,SsbHashType,SsbSignature,SsbId};
 
 macro_rules! cast {
     ($input:expr,$pth:path) => {
@@ -21,10 +21,30 @@ macro_rules! cast_opt {
     ($input:expr,$pth:path) => {
         match $input {
             None => Ok(None),
+            Some(Value::Null) => Ok(None),
             Some($pth(x)) => Ok(Some(x)),
             _ => Err(to_ioerr(format!("cannot cast {} to {}",stringify!($input),stringify!($pth))))       
         };
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Feed {
+    pub key: SsbHash,
+    pub value: FeedValue,
+    pub timestamp: f64,
+    pub rts: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FeedValue {
+    pub previous: Option<SsbHash>,
+    pub author: SsbId,
+    pub sequence: u64,
+    pub timestamp: f64,
+    pub hash: SsbHashType,
+    pub content: serde_json::Value,
+    pub signature: SsbSignature,
 }
 
 impl Feed {
@@ -94,11 +114,11 @@ impl Feed {
     }
 
 
-    pub fn from_str(feed: &str) -> Result<Feed,io::Error>{
+    pub fn from_str(feedstr: &str) -> Result<Feed,io::Error>{
+    
+        // TODO: check optiimizations, maybe so messy
 
-        // TODO: check optimizations, maybe so messy
-
-        let feed: Value = serde_json::from_str(feed).map_err(to_ioerr)?;
+        let feed: Value = serde_json::from_str(feedstr).map_err(to_ioerr)?;
 
         // verify message described key
         let mut feed = cast!(Some(feed),Value::Object)?;
@@ -112,6 +132,7 @@ impl Feed {
         let feed_value = feed.remove("value").ok_or(to_ioerr("feed value not found"))?;
         let feed_value_digest = sha256::hash(stringify_json(&feed_value)?.as_bytes());
         if feed_key[1..].to_sha256()? != feed_value_digest {
+            println!("***** {}",feedstr);
             return Err(to_ioerr("cannot check message key"));
         }
 
@@ -283,6 +304,14 @@ r#"{
         let signed_feed = Feed::sign(content,&id,None,1)?;
         println!("{}",signed_feed);
         Feed::from_str(&signed_feed)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_dump() -> Result<(),io::Error> {
+        let j  = r#"{"key":"%Vh0J+tFj52JUcklvF9j4K1NnGkuPnF9KJiOoD3J/iCk=.sha256","value":{"previous":"%fnYEFgdcp94r0z5JxGXF73OwSPe6qYrYV+y+xwBLlvg=.sha256","sequence":57,"author":"@ZFWw+UclcUgYi081/C8lhgH+KQ9s7YJRoOYGnzxW/JQ=.ed25519","timestamp":1573926246987,"hash":"sha256","content":{"type":"post","channel":"git-ssb","text":"Hi!\n\nI'm trying to setup git-ssb and I get a\n\n`No matching version found for debug@^4.1.1.`\n\nerror. Steps I realized:\n\n```\nnvm use 10.17.0\nnpm i -g ssb-server &\nsbot plugins.install ssb-npm-registry --from 'http://viewer.scuttlebot.io/&2afFvk14JEObC047kYmBLioDgMfHe2Eg5/gndSjPQ1Q=.sha256'\nnpm i --registry=http://localhost:8043/ -g ssb-npm\n```\n\nI've been debugging a little and it seems that the registry that is using is the located in\n\n`http://localhost:8043/debug`\n\nand inside the json it's only the `2.2.0`,`2.6.3`, '2.6.8'  and `3.1.0` versions (see https://pastebin.com/CUzQmgrx)\n\nMaybe it's not still sync'ed? \n\nThanks! \n\nAdrià","mentions":[]},"signature":"EGXJ1eGyUuoOLU536YsBpOxTueWIuuuVKcoCtBI1PVi+/qiUMQmZ/cTwQJqxLEnyFQvPA6jN2F7f8uxghexgAg==.sig.ed25519"},"timestamp":1573926246987.001}"#;
+        let v: Value = serde_json::from_str(j).map_err(to_ioerr)?;
+        println!("{}",stringify_json(&v)?);
         Ok(())
     }
     
