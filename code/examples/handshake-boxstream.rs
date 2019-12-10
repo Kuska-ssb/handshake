@@ -9,7 +9,8 @@ use std::env;
 use std::io::{self};
 use std::net::{TcpListener, TcpStream};
 
-use code::handshake::{Handshake, SharedSecret};
+use code::boxstream::BoxStream;
+use code::handshake::{handshake_client_sync, handshake_server_sync, SharedSecret};
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -21,11 +22,11 @@ fn usage(arg0: &str) {
 }
 
 fn print_shared_secret(shared_secret: &SharedSecret) {
-    debug!("shared_secret {{");
-    debug!("  ab: {}", hex::encode(shared_secret.ab.as_ref()));
-    debug!("  aB: {}", hex::encode(shared_secret.aB.as_ref()));
-    debug!("  Ab: {}", hex::encode(shared_secret.Ab.as_ref()));
-    debug!("}}");
+    println!("shared_secret {{");
+    println!("  ab: {}", hex::encode(shared_secret.ab.as_ref()));
+    println!("  aB: {}", hex::encode(shared_secret.aB.as_ref()));
+    println!("  Ab: {}", hex::encode(shared_secret.Ab.as_ref()));
+    println!("}}");
 }
 
 fn test_server(
@@ -34,17 +35,13 @@ fn test_server(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_server(&socket, &socket, net_id, pk, sk)
-        .recv_client_hello()?
-        .send_server_hello()?
-        .recv_client_auth()?
-        .send_server_accept()?;
+    let handshake = handshake_server_sync(&socket, net_id, pk, sk)?;
     println!("Handshake complete! 💃");
     debug!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    print_shared_secret(&handshake.shared_secret);
 
     let (mut box_stream_read, mut box_stream_write) =
-        handshake.to_box_stream(0x8000).split_read_write();
+        BoxStream::new(&socket, &socket, 0x8000, handshake).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
@@ -69,17 +66,13 @@ fn test_client(
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_client(&socket, &socket, net_id, pk, sk)
-        .send_client_hello()?
-        .recv_server_hello()?
-        .send_client_auth(server_pk)?
-        .recv_server_accept()?;
+    let handshake = handshake_client_sync(&socket, net_id, pk, sk, server_pk)?;
     println!("Handshake complete! 💃");
     debug!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    print_shared_secret(&handshake.shared_secret);
 
     let (mut box_stream_read, mut box_stream_write) =
-        handshake.to_box_stream(0x8000).split_read_write();
+        BoxStream::new(&socket, &socket, 0x8000, handshake).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());

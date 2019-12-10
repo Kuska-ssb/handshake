@@ -6,7 +6,7 @@ use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 
-use code::handshake::{Handshake, SharedSecret};
+use code::handshake::{handshake_client_sync, handshake_server_sync, SharedSecret};
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -31,14 +31,10 @@ fn test_server(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_server(&socket, &socket, net_id, pk, sk)
-        .recv_client_hello()?
-        .send_server_hello()?
-        .recv_client_auth()?
-        .send_server_accept()?;
+    let handshake = handshake_server_sync(&socket, net_id, pk, sk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    print_shared_secret(&handshake.shared_secret);
     Ok(())
 }
 
@@ -49,14 +45,10 @@ fn test_client(
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
 ) -> io::Result<()> {
-    let handshake = Handshake::new_client(&socket, &socket, net_id, pk, sk)
-        .send_client_hello()?
-        .recv_server_hello()?
-        .send_client_auth(server_pk)?
-        .recv_server_accept()?;
+    let handshake = handshake_client_sync(&socket, net_id, pk, sk, server_pk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    print_shared_secret(&handshake.shared_secret);
     Ok(())
 }
 

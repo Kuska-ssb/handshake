@@ -7,7 +7,9 @@ extern crate serde_json;
 extern crate serde_derive;
 extern crate base64;
 
+#[macro_use]
+pub mod utils;
+
 pub mod boxstream;
 pub mod handshake;
 pub mod pasync;
-
