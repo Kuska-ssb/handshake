@@ -21,6 +21,56 @@ pub struct KeyNonce {
 }
 
 impl KeyNonce {
+    // Return (send_key_nonce, recv_key_nonce)
+    pub fn from_handshake(handshake_complete: HandshakeComplete) -> (Self, Self) {
+        let HandshakeComplete {
+            net_id,
+            pk,
+            ephemeral_pk,
+            peer_pk,
+            peer_ephemeral_pk,
+            shared_secret,
+        } = handshake_complete;
+        let shared_secret_0 = sha256::hash(&concat!(
+            auth::KEYBYTES + curve25519::GROUPELEMENTBYTES * 3,
+            net_id.as_ref(),
+            shared_secret.ab.as_ref(),
+            shared_secret.aB.as_ref(),
+            shared_secret.Ab.as_ref()
+        ));
+        let shared_secret_1 = sha256::hash(shared_secret_0.as_ref());
+        let send_hmac_nonce = auth::authenticate(peer_ephemeral_pk.as_ref(), &net_id);
+        let send_key_nonce = KeyNonce {
+            key: secretbox::Key(
+                sha256::hash(&[shared_secret_1.as_ref(), peer_pk.as_ref()].concat()).0,
+            ),
+            nonce: secretbox::Nonce(*array_ref![send_hmac_nonce.as_ref(), 0, 24]),
+        };
+        let recv_hmac_nonce = auth::authenticate(ephemeral_pk.as_ref(), &net_id);
+        let recv_key_nonce = KeyNonce {
+            key: secretbox::Key(sha256::hash(&[shared_secret_1.as_ref(), pk.as_ref()].concat()).0),
+            nonce: secretbox::Nonce::from_slice(&recv_hmac_nonce.as_ref()[..secretbox::NONCEBYTES])
+                .unwrap(),
+        };
+        debug!(
+            "recv_key_nonce.key {}",
+            hex::encode(recv_key_nonce.key.as_ref())
+        );
+        debug!(
+            "recv_key_nonce.nonce {}",
+            hex::encode(recv_key_nonce.nonce.as_ref())
+        );
+        debug!(
+            "send_key_nonce.key {}",
+            hex::encode(send_key_nonce.key.as_ref())
+        );
+        debug!(
+            "send_key_nonce.nonce {}",
+            hex::encode(send_key_nonce.nonce.as_ref())
+        );
+        (send_key_nonce, recv_key_nonce)
+    }
+
     pub fn increment_be_inplace(&mut self) {
         let mut byte_no: i8 = (self.nonce.0.len() - 1) as i8;
         while byte_no >= 0 {
@@ -64,411 +114,6 @@ impl Header {
             (self.body_len as u16).to_be_bytes().as_ref(),
             self.body_mac.as_ref()
         )
-    }
-}
-
-pub struct BoxStream<R: Read, W: Write> {
-    reader: BoxStreamRead<R>,
-    writer: BoxStreamWrite<W>,
-}
-
-impl<R: Read, W: Write> BoxStream<R, W> {
-    pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
-        let BoxStream { reader, writer } = self;
-        (reader, writer)
-    }
-}
-
-#[derive(Debug)]
-enum RecvStatus {
-    ExpectHeader,
-    ExpectBody(Header),
-}
-
-pub struct BoxStreamRead<R> {
-    stream: R,
-    key_nonce: KeyNonce,
-    plain: Box<[u8]>,
-    plain_len: usize,
-    plain_off: usize,
-    enc: Box<[u8]>,
-    // buf: Box<[u8]>,
-    // buf_cap: usize,
-    // enc: Box<[u8]>,
-    // enc_cap: usize,
-    // dec: Box<[u8]>,
-    // dec_pos: usize,
-    // dec_cap: usize,
-    // status: RecvStatus,
-    // need_more_bytes: bool,
-}
-
-/*
-
-impl<R: Read> Read for BoxStreamRead<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        println!("read: enter");
-        if self.need_more_bytes {
-            println!("reading more bytes");
-            self.enc_cap += self.stream.read(&mut self.enc[self.enc_cap..])?;
-        }
-        let mut enc_pos = 0;
-        let mut buf_pos = 0;
-        loop {
-            let result = match self.status {
-                // The first part of a BoxStream message is a fixed length header
-                RecvStatus::ExpectHeader => {
-                    println!("expectheader");
-                    match decrypt_box_stream_header(
-                        &mut self.key_nonce,
-                        &self.enc[enc_pos..self.enc_cap],
-                    ) {
-                        Ok(header) => {
-                            println!("expectheader complete");
-                            enc_pos += MSG_HEADER_LEN;
-                            debug!("Header enc_pos: {}", enc_pos);
-                            self.status = RecvStatus::ExpectBody(header);
-                            Ok(())
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
-                RecvStatus::ExpectBody(ref header) => {
-                    if buf.len() - buf_pos < header.body_len {
-                        // Not enough space in buf to decrypt the next body
-                        break;
-                    }
-                    match decrypt_box_stream_body(
-                        header,
-                        &mut self.key_nonce,
-                        &self.enc[enc_pos..self.enc_cap],
-                        &mut buf[buf_pos..],
-                    ) {
-                        Ok(n) => {
-                            enc_pos += n;
-                            debug!("Body enc_pos: {}", enc_pos);
-                            buf_pos += header.body_len;
-                            self.status = RecvStatus::ExpectHeader;
-                            Ok(())
-                        }
-                        Err(e) => Err(e),
-                    }
-                }
-            };
-            if let Err(e) = result {
-                match e.kind() {
-                    io::ErrorKind::InvalidInput => {
-                        // If there are encrypted bytes left but not enough to decrypt a
-                        // header/body, we need to read more bytes next time.
-                        if enc_pos < self.enc_cap {
-                            self.need_more_bytes = true;
-                        }
-                        break;
-                    }
-                    _ => {
-                        return Err(e);
-                    }
-                }
-            }
-        }
-        self.enc.copy_within(enc_pos..self.enc_cap, 0);
-        self.enc_cap = self.enc_cap - enc_pos;
-        Ok(buf_pos)
-    }
-}
-*/
-
-// FIXME: Advance the position of self.enc.  Otherwise this will just work when there's only a
-// single encrypted packet in the buffer.
-// TODO: Add a test that sends two encrypted packets at once.
-impl<R: Read> Read for BoxStreamRead<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // no data available, lock until available
-        if self.plain_off == self.plain_len {
-            let mut status = RecvStatus::ExpectHeader;
-            let mut read_limit = MSG_HEADER_LEN;
-            let mut enc_cap = 0;
-
-            loop {
-                enc_cap += self.stream.read(&mut self.enc[enc_cap..read_limit])?;
-                if enc_cap < read_limit {
-                    continue;
-                }
-                match status {
-                    RecvStatus::ExpectHeader => {
-                        debug!(
-                            "read header ({}): {}",
-                            self.enc[..read_limit].len(),
-                            hex::encode(&self.enc[..read_limit])
-                        );
-                        let header = decrypt_box_stream_header(
-                            &mut self.key_nonce,
-                            &mut self.enc[..enc_cap],
-                        )?;
-                        if header.body_len > self.enc.len() {
-                            return Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                "internal buffer too small",
-                            ));
-                        }
-                        read_limit = MSG_HEADER_LEN + header.body_len;
-                        status = RecvStatus::ExpectBody(header);
-                    }
-                    RecvStatus::ExpectBody(ref header) => {
-                        let n = cmp::min(header.body_len, read_limit - MSG_HEADER_LEN);
-                        self.plain[..n]
-                            .copy_from_slice(&self.enc[MSG_HEADER_LEN..MSG_HEADER_LEN + n]);
-                        self.plain_len = decrypt_box_stream_body(
-                            header,
-                            &mut self.key_nonce,
-                            &mut self.plain[..n],
-                        )?;
-                        self.plain_off = 0;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // read from plaintext buffer
-        let len = cmp::min(self.plain_len - self.plain_off, buf.len());
-        buf[..len].copy_from_slice(&self.plain[self.plain_off..len]);
-        self.plain_off += len;
-        Ok(len)
-    }
-}
-
-impl<R: Read, W: Write> BoxStream<R, W> {
-    pub fn new(
-        read_stream: R,
-        write_stream: W,
-        recv_buf_len: usize,
-        handshake_complete: HandshakeComplete,
-    ) -> Self {
-        let HandshakeComplete {
-            net_id,
-            pk,
-            ephemeral_pk,
-            peer_pk,
-            peer_ephemeral_pk,
-            shared_secret,
-        } = handshake_complete;
-        let shared_secret_0 = sha256::hash(
-            &[
-                net_id.as_ref(),
-                shared_secret.ab.as_ref(),
-                shared_secret.aB.as_ref(),
-                shared_secret.Ab.as_ref(),
-            ]
-            .concat(),
-        );
-        let shared_secret_1 = sha256::hash(shared_secret_0.as_ref());
-        let send_hmac_nonce = auth::authenticate(peer_ephemeral_pk.as_ref(), &net_id);
-        let send_key_nonce = KeyNonce {
-            key: secretbox::Key(
-                sha256::hash(&[shared_secret_1.as_ref(), peer_pk.as_ref()].concat()).0,
-            ),
-            nonce: secretbox::Nonce(*array_ref![send_hmac_nonce.as_ref(), 0, 24]),
-        };
-        let recv_hmac_nonce = auth::authenticate(ephemeral_pk.as_ref(), &net_id);
-        let recv_key_nonce = KeyNonce {
-            key: secretbox::Key(sha256::hash(&[shared_secret_1.as_ref(), pk.as_ref()].concat()).0),
-            nonce: secretbox::Nonce(*array_ref![recv_hmac_nonce.as_ref(), 0, 24]),
-        };
-        let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
-        debug!(
-            "recv_key_nonce.key {}",
-            hex::encode(recv_key_nonce.key.as_ref())
-        );
-        debug!(
-            "recv_key_nonce.nonce {}",
-            hex::encode(recv_key_nonce.nonce.as_ref())
-        );
-        debug!(
-            "send_key_nonce.key {}",
-            hex::encode(send_key_nonce.key.as_ref())
-        );
-        debug!(
-            "send_key_nonce.nonce {}",
-            hex::encode(send_key_nonce.nonce.as_ref())
-        );
-        let reader = BoxStreamRead {
-            stream: read_stream,
-            key_nonce: recv_key_nonce,
-            plain: vec![0; capacity].into_boxed_slice(),
-            plain_len: 0,
-            plain_off: 0,
-            enc: vec![0; capacity].into_boxed_slice(),
-            // buf: vec![0; capacity].into_boxed_slice(),
-            // buf_cap: 0,
-            // enc: vec![0; capacity].into_boxed_slice(),
-            // enc_cap: 0,
-            // dec: vec![0; capacity].into_boxed_slice(),
-            // dec_pos: 0,
-            // dec_cap: 0,
-            // status: RecvStatus::ExpectHeader,
-            // need_more_bytes: true,
-        };
-        let writer = BoxStreamWrite {
-            stream: write_stream,
-            key_nonce: send_key_nonce,
-            // buf: Vec::with_capacity(MSG_BODY_MAX_LEN),
-            // buf_cap: 0,
-            // enc: Vec::with_capacity(capacity),
-            enc: vec![0; capacity],
-            // enc_pos: 0,
-            // enc_cap: 0,
-        };
-        Self { reader, writer }
-    }
-}
-
-// Decrypt BoxStream messages from recv.buf into recv.dec.  Return the position of the first
-// non-decrypted byte in recv.buf.
-// fn decrypt_box_stream(recv: &mut BoxStreamRead) -> io::Result<usize> {
-//     let mut buf_pos = 0;
-//     // Decrypt messages from the recv.buf in a loop
-//     loop {
-//         match recv.status {
-//             // The first part of a BoxStream message is a fixed length header
-//             RecvStatus::ExpectHeader => {
-//                 // Try to decrypt the header from the received buffer
-//                 if recv.buf_cap - buf_pos < MSG_HEADER_LEN {
-//                     return Ok(buf_pos);
-//                 }
-//                 let secret_header = &recv.buf[buf_pos..buf_pos + MSG_HEADER_LEN];
-//                 buf_pos += MSG_HEADER_LEN;
-//                 match secretbox::open(secret_header, &recv.key_nonce.nonce, &recv.key_nonce.key) {
-//                     Ok(h) => {
-//                         recv.key_nonce.nonce.increment_le_inplace();
-//                         let header = Header::from_bytes(array_ref![&h, 0, 18]);
-//                         // Set the status to ExpectBody(header) in order to read the body
-//                         // referenced in the header in the next iteration.
-//                         recv.status = RecvStatus::ExpectBody(header);
-//                     }
-//                     Err(()) => {
-//                         return Err(io::Error::new(
-//                             io::ErrorKind::Other,
-//                             "secretbox::open for header failed",
-//                         ));
-//                     }
-//                 };
-//             }
-//             // The second part of a BoxStream message is a variable length body.
-//             // Use the header from the previous ExpectHeader state decryption
-//             RecvStatus::ExpectBody(ref header) => {
-//                 if recv.buf_cap - buf_pos < header.body_len {
-//                     return Ok(buf_pos);
-//                 }
-//                 let secret_body = &[
-//                     header.body_mac.as_ref(),
-//                     &recv.buf[buf_pos..buf_pos + header.body_len],
-//                 ]
-//                 .concat();
-//                 buf_pos += header.body_len;
-//                 let body = match secretbox::open(
-//                     secret_body,
-//                     &recv.key_nonce.nonce,
-//                     &recv.key_nonce.key,
-//                 ) {
-//                     Ok(body) => {
-//                         recv.key_nonce.nonce.increment_le_inplace();
-//                         // Set the status to ExpectHeader in order to read a header in the next
-//                         // iteration.
-//                         recv.status = RecvStatus::ExpectHeader;
-//                         body
-//                     }
-//                     Err(()) => {
-//                         return Err(io::Error::new(
-//                             io::ErrorKind::Other,
-//                             "secretbox::open for body failed",
-//                         ));
-//                     }
-//                 };
-//                 // Write the decrypted body at recv.dec
-//                 recv.dec[recv.dec_cap..recv.dec_cap + body.len()].copy_from_slice(&body);
-//                 buf_pos += body.len();
-//                 recv.dec_cap += body.len();
-//             }
-//         }
-//     }
-// }
-
-// impl<R: AsyncRead + Unpin> AsyncRead for BoxStream<R> {
-//     fn poll_read(
-//         self: Pin<&mut Self>,
-//         cx: &mut Context<'_>,
-//         buf: &mut [u8],
-//     ) -> Poll<io::Result<usize>> {
-//         let BoxStream { stream, recv, .. } = self.get_mut();
-//         // Decrypted buffer is empty, we must fill it
-//         if recv.dec_pos == recv.dec_pos {
-//             recv.dec_pos = 0;
-//             recv.dec_cap = 0;
-//             let poll = Pin::new(stream).poll_read(cx, &mut recv.buf[recv.buf_cap..]);
-//             match poll {
-//                 Poll::Ready(Ok(n)) => {
-//                     recv.buf_cap += n;
-//                 }
-//                 Poll::Ready(Err(e)) => {
-//                     return Poll::Ready(Err(e));
-//                 }
-//                 Poll::Pending => {
-//                     return Poll::Pending;
-//                 }
-//             }
-//             match decrypt_box_stream(recv) {
-//                 Err(e) => {
-//                     return Poll::Ready(Err(e));
-//                 }
-//                 Ok(buf_pos) => {
-//                     // Reset recv.buf by forgetting the decrypted bytes and moving the decrypted
-//                     // bytes to the beginning.
-//                     recv.buf.copy_within(buf_pos..recv.buf_cap, 0);
-//                     recv.buf_cap = recv.buf_cap - buf_pos;
-//                 }
-//             }
-//         }
-//         // We have some decrypted data to give back
-//         if recv.dec_pos < recv.dec_cap {
-//             let len = cmp::min(buf.len(), recv.dec_cap - recv.dec_pos);
-//             buf[..len].copy_from_slice(&recv.dec[recv.dec_pos..recv.dec_pos + len]);
-//             recv.dec_pos += len;
-//             return Poll::Ready(Ok(len));
-//         }
-//         return Poll::Pending;
-//     }
-// }
-
-pub struct BoxStreamWrite<W> {
-    stream: W,
-    key_nonce: KeyNonce,
-    // buf: Vec<u8>,
-    // buf_cap: usize,
-    enc: Vec<u8>,
-    // enc_pos: usize,
-    // enc_cap: usize,
-}
-
-impl<W: Write> Write for BoxStreamWrite<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // Encrypt into as many messages as we can fit in the self.send.enc buffer
-        let mut buf_n = 0;
-        let mut enc_n = 0;
-        while buf_n < buf.len() && enc_n + MSG_HEADER_LEN + MSG_BODY_MAX_LEN < self.enc.len() {
-            let n =
-                encrypt_box_stream_msg(&mut self.key_nonce, &buf[buf_n..], &mut self.enc[enc_n..]);
-            buf_n += n;
-            enc_n += n + MSG_HEADER_LEN;
-            debug!("Encrypted {} bytes", n);
-        }
-        // Write all the encrypted messages to the stream
-        self.stream.write_all(&self.enc[..enc_n])?;
-        Ok(buf_n)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.stream.flush()
     }
 }
 
@@ -572,64 +217,248 @@ fn decrypt_box_stream_body(
     }
 }
 
-// Not working yet
-// impl<W: AsyncWrite + Unpin> AsyncWrite for BoxStream<W> {
-//     fn poll_write(
-//         mut self: Pin<&mut Self>,
-//         cx: &mut Context<'_>,
-//         buf: &[u8],
-//     ) -> Poll<io::Result<usize>> {
-//         // If we can't buffer any more, flush
-//         if self.send.enc.len() + buf.len() > self.send.enc.capacity() {
-//             match Pin::new(&mut self).poll_flush(cx) {
-//                 Poll::Ready(Err(e)) => {
-//                     return Poll::Ready(Err(e));
-//                 }
-//                 Poll::Pending => {
-//                     return Poll::Pending;
-//                 }
-//                 _ => {}
-//             }
-//         }
-//         let BoxStream { stream, send, .. } = self.get_mut();
-//         // If we don't have enough capacity to buffer, write direclty
-//         // if buf.len() > self.enc.capacity() {
-//         //     // Write directly?
-//         // } else {
-//         //     buffer
-//         // }
-//         let mut buf_pos = 0;
-//         loop {
-//             if buf[buf_pos..].len() < MSG_BODY_MAX_LEN {
-//                 break;
-//             }
-//             buf_pos += encrypt_box_stream_msg(&mut send.key_nonce, &buf[buf_pos..], &mut send.enc);
-//         }
-//         // If send.enc is full, write it to the stream
-//         if send.enc_pos < send.enc_cap {
-//             let poll = Pin::new(stream).poll_write(cx, &send.enc[send.enc_pos..send.enc_cap]);
-//             match poll {
-//                 Poll::Ready(Ok(n)) => {
-//                     send.enc_pos += n;
-//                 }
-//                 Poll::Ready(Err(e)) => {
-//                     return Poll::Ready(Err(e));
-//                 }
-//                 Poll::Pending => {
-//                     return Poll::Pending;
-//                 }
-//             }
-//         }
-//         Poll::Pending
-//     }
-//
-//     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-//         let BoxStream { stream, .. } = self.get_mut();
-//         Pin::new(stream).poll_flush(cx)
-//     }
-//
-//     fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-//         let BoxStream { stream, .. } = self.get_mut();
-//         Pin::new(stream).poll_close(cx)
-//     }
-// }
+pub struct BoxStream<R: Read, W: Write> {
+    reader: BoxStreamRead<R>,
+    writer: BoxStreamWrite<W>,
+}
+
+impl<R: Read, W: Write> BoxStream<R, W> {
+    pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
+        let BoxStream { reader, writer } = self;
+        (reader, writer)
+    }
+
+    pub fn new(
+        read_stream: R,
+        write_stream: W,
+        recv_buf_len: usize,
+        handshake_complete: HandshakeComplete,
+    ) -> Self {
+        let (send_key_nonce, recv_key_nonce) = KeyNonce::from_handshake(handshake_complete);
+        let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
+        let reader = BoxStreamRead {
+            stream: read_stream,
+            key_nonce: recv_key_nonce,
+            plain: vec![0; capacity].into_boxed_slice(),
+            plain_len: 0,
+            plain_off: 0,
+            enc: vec![0; capacity].into_boxed_slice(),
+            // buf: vec![0; capacity].into_boxed_slice(),
+            // buf_cap: 0,
+            // enc: vec![0; capacity].into_boxed_slice(),
+            // enc_cap: 0,
+            // dec: vec![0; capacity].into_boxed_slice(),
+            // dec_pos: 0,
+            // dec_cap: 0,
+            // status: RecvStatus::ExpectHeader,
+            // need_more_bytes: true,
+        };
+        let writer = BoxStreamWrite {
+            stream: write_stream,
+            key_nonce: send_key_nonce,
+            // buf: Vec::with_capacity(MSG_BODY_MAX_LEN),
+            // buf_cap: 0,
+            // enc: Vec::with_capacity(capacity),
+            enc: vec![0; capacity],
+            // enc_pos: 0,
+            // enc_cap: 0,
+        };
+        Self { reader, writer }
+    }
+}
+
+#[derive(Debug)]
+enum RecvStatus {
+    ExpectHeader,
+    ExpectBody(Header),
+}
+
+pub struct BoxStreamRead<R> {
+    stream: R,
+    key_nonce: KeyNonce,
+    plain: Box<[u8]>,
+    plain_len: usize,
+    plain_off: usize,
+    enc: Box<[u8]>,
+    // buf: Box<[u8]>,
+    // buf_cap: usize,
+    // enc: Box<[u8]>,
+    // enc_cap: usize,
+    // dec: Box<[u8]>,
+    // dec_pos: usize,
+    // dec_cap: usize,
+    // status: RecvStatus,
+    // need_more_bytes: bool,
+}
+
+// FIXME: Advance the position of self.enc.  Otherwise this will just work when there's only a
+// single encrypted packet in the buffer.
+// TODO: Add a test that sends two encrypted packets at once.
+impl<R: Read> Read for BoxStreamRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // no data available, lock until available
+        if self.plain_off == self.plain_len {
+            let mut status = RecvStatus::ExpectHeader;
+            let mut read_limit = MSG_HEADER_LEN;
+            let mut enc_cap = 0;
+
+            loop {
+                enc_cap += self.stream.read(&mut self.enc[enc_cap..read_limit])?;
+                if enc_cap < read_limit {
+                    continue;
+                }
+                match status {
+                    RecvStatus::ExpectHeader => {
+                        debug!(
+                            "read header ({}): {}",
+                            self.enc[..read_limit].len(),
+                            hex::encode(&self.enc[..read_limit])
+                        );
+                        let header = decrypt_box_stream_header(
+                            &mut self.key_nonce,
+                            &mut self.enc[..enc_cap],
+                        )?;
+                        if header.body_len > self.enc.len() {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Other,
+                                "internal buffer too small",
+                            ));
+                        }
+                        read_limit = MSG_HEADER_LEN + header.body_len;
+                        status = RecvStatus::ExpectBody(header);
+                    }
+                    RecvStatus::ExpectBody(ref header) => {
+                        let n = cmp::min(header.body_len, read_limit - MSG_HEADER_LEN);
+                        self.plain[..n]
+                            .copy_from_slice(&self.enc[MSG_HEADER_LEN..MSG_HEADER_LEN + n]);
+                        self.plain_len = decrypt_box_stream_body(
+                            header,
+                            &mut self.key_nonce,
+                            &mut self.plain[..n],
+                        )?;
+                        self.plain_off = 0;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // read from plaintext buffer
+        let len = cmp::min(self.plain_len - self.plain_off, buf.len());
+        buf[..len].copy_from_slice(&self.plain[self.plain_off..len]);
+        self.plain_off += len;
+        Ok(len)
+    }
+}
+
+pub struct BoxStreamWrite<W> {
+    stream: W,
+    key_nonce: KeyNonce,
+    // buf: Vec<u8>,
+    // buf_cap: usize,
+    enc: Vec<u8>,
+    // enc_pos: usize,
+    // enc_cap: usize,
+}
+
+impl<W: Write> Write for BoxStreamWrite<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // Encrypt into as many messages as we can fit in the self.send.enc buffer
+        let mut buf_n = 0;
+        let mut enc_n = 0;
+        while buf_n < buf.len() && enc_n + MSG_HEADER_LEN + MSG_BODY_MAX_LEN < self.enc.len() {
+            let n =
+                encrypt_box_stream_msg(&mut self.key_nonce, &buf[buf_n..], &mut self.enc[enc_n..]);
+            buf_n += n;
+            enc_n += n + MSG_HEADER_LEN;
+            debug!("Encrypted {} bytes", n);
+        }
+        // Write all the encrypted messages to the stream
+        self.stream.write_all(&self.enc[..enc_n])?;
+        Ok(buf_n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const key_a_hex: &str = "8198e2d3456f022b2020f36ce874ad8b337a1c2da13f69f6458fd63415a51943";
+    const nonce_a_hex: &str = "a20fa8fe59a80f5f07c80265e5e7664582f0f553f36cd6ce";
+    const key_b_hex: &str = "9bf1ec7af3f80934474e5ff73e27f2f5070f4fe4d80511923b7acb686463bfcc";
+    const nonce_b_hex: &str = "799762378d9e1d0a8a510a249dc4e76788d6ff9993efc5df";
+
+    struct Peer {
+        send_key_nonce: KeyNonce,
+        recv_key_nonce: KeyNonce,
+    }
+
+    #[test]
+    fn test_boxstream() {
+        let key_a = secretbox::Key::from_slice(&hex::decode(key_a_hex).unwrap()).unwrap();
+        let nonce_a = secretbox::Nonce::from_slice(&hex::decode(nonce_a_hex).unwrap()).unwrap();
+        let key_b = secretbox::Key::from_slice(&hex::decode(key_b_hex).unwrap()).unwrap();
+        let nonce_b = secretbox::Nonce::from_slice(&hex::decode(nonce_b_hex).unwrap()).unwrap();
+
+        let mut peer_a = Peer {
+            send_key_nonce: KeyNonce {
+                key: key_a.clone(),
+                nonce: nonce_a,
+            },
+            recv_key_nonce: KeyNonce {
+                key: key_b.clone(),
+                nonce: nonce_b,
+            },
+        };
+        let mut peer_b = Peer {
+            send_key_nonce: KeyNonce {
+                key: key_b.clone(),
+                nonce: nonce_b,
+            },
+            recv_key_nonce: KeyNonce {
+                key: key_a.clone(),
+                nonce: nonce_a,
+            },
+        };
+
+        let mut buf_a = [0; 4096];
+        let mut buf_b = [0; 4096];
+
+        let msg_a0: Vec<u8> = (0..=255).collect();
+        let msg_a1: Vec<u8> = (0..=255).rev().collect();
+
+        // Send two messages from A to B
+        for msg_a in &[msg_a0, msg_a1] {
+            // A
+            let msg_a: Vec<u8> = (0..=255).collect();
+            let send_buf_a = {
+                let n = encrypt_box_stream_msg(&mut peer_a.send_key_nonce, &msg_a, &mut buf_a);
+                // Assert that 256 bytes have been encrypted from msg_a
+                assert!(n == 256);
+                &buf_a[..MSG_HEADER_LEN + n]
+            };
+
+            // B
+            buf_b[..send_buf_a.len()].copy_from_slice(send_buf_a);
+            let mut recv_buf_b = &mut buf_b[..send_buf_a.len()];
+            let dec_msg_a = {
+                let header =
+                    decrypt_box_stream_header(&mut peer_b.recv_key_nonce, &mut recv_buf_b).unwrap();
+                // Assert that the body is 256 bytes
+                assert!(header.body_len == 256);
+                let mut enc_body = &mut recv_buf_b[MSG_HEADER_LEN..];
+                let n = decrypt_box_stream_body(&header, &mut peer_b.recv_key_nonce, &mut enc_body)
+                    .unwrap();
+                // Assert that the decrypted bytes are all the received bytes
+                assert!(n == enc_body.len());
+                &enc_body[..n]
+            };
+            // Assert that the decrypted message is the message that was encrypted
+            assert!(dec_msg_a == msg_a.as_slice());
+        }
+    }
+}
