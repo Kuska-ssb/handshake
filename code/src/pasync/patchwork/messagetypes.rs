@@ -6,17 +6,6 @@ pub type SsbId = String;
 pub type SsbChannel = String;
 pub type SsbSignature = String;
 
-#[derive(Debug, Deserialize)]
-pub struct ErrorRes {
-    pub name: String,
-    pub message: String,
-    pub stack: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct WhoAmI {
-    pub id: String,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct Mention {
@@ -30,17 +19,6 @@ pub struct MessageContent {
     pub xtype: String,
     pub text: String,
     pub mentions: Option<Vec<Mention>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Message {
-    pub previous: Option<String>,
-    pub sequence: u64,
-    pub author: String,
-    pub timestamp: u64,
-    pub hash: String,
-    pub content: MessageContent,
-    pub signature: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -140,47 +118,5 @@ pub enum FeedTypedContent {
     Channel { channel: String, subscribed: bool },
     #[serde(rename = "vote")]
     Vote { vote: Vote },
-    /*
-    #[serde(rename = "gathering")]
-    Gathering,
-    #[serde(rename = "post-edit")]
-    PostEdit,
-    #[serde(rename = "git-update")]
-    GitUpdate,
-    #[serde(rename = "git-repo")]
-    GitRepo,
-    #[serde(rename = "flag")]
-    Flag,
-    #[serde(rename = "append")]
-    Append,
-    #[serde(rename = "from")]
-    From,
-    #[serde(rename = "issue")]
-    Issue,
-    #[serde(rename = "pull-request")]
-    PullRequest,
-    #[serde(rename = "event")]
-    Event,
-    #[serde(rename = "issue-edit")]
-    IssueEdit,
-    #[serde(rename = "meta-data")]
-    MetaData,
-    #[serde(rename = "meta-image")]
-    MetaImage,
-    */
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-pub enum FeedContent {
-    Untyped(String),
-    Typed(FeedTypedContent),
-}
-
-
-#[derive(Debug, Deserialize)]
-pub struct LatestUserMessage {
-    pub id: SsbId,
-    pub sequence: u64,
-    pub ts: u64,
-}

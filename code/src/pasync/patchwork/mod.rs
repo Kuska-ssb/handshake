@@ -1,7 +1,9 @@
 mod api;
 mod config;
-mod dto;
+mod messagetypes;
 mod feed;
+mod message;
+mod encoding;
 mod privatebox;
 
 pub use api::{
@@ -10,3 +12,4 @@ pub use api::{
 };
 pub use config::{ssb_net_id, IdentitySecret};
 pub use privatebox::{is_privatebox,privatebox_cipher,privatebox_decipher};
+pub use encoding::{ssb_sha256,stringify_json};

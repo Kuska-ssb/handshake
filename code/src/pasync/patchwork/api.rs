@@ -3,8 +3,27 @@ use serde_json;
 
 use crate::pasync::rpc::{RpcClient, Header, RequestNo, RpcType};
 use crate::pasync::util::to_ioerr;
-use super::dto::{ErrorRes,Message,LatestUserMessage,WhoAmI};
+use super::message::Message;
 use super::feed::Feed;
+
+#[derive(Debug, Deserialize)]
+pub struct ErrorRes {
+    pub name: String,
+    pub message: String,
+    pub stack: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WhoAmI {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LatestUserMessage {
+    pub id: String,
+    pub sequence: u64,
+    pub ts: u64,
+}
 
 // https://github.com/ssbc/ssb-db/blob/master/api.md
 #[derive(Debug, Serialize)]
@@ -215,7 +234,12 @@ pub fn parse_whoami(header: &Header, body: &Vec<u8>) -> Result<WhoAmI, io::Error
 }
 
 pub fn parse_message(header: &Header, body: &Vec<u8>) -> Result<Message, io::Error> {
-    parse_json::<Message>(&header, &body)
+    if header.is_end_or_error {
+        let error: ErrorRes = serde_json::from_slice(&body[..]).map_err(to_ioerr)?;
+        Err(to_ioerr(format!("{:?}", error)))
+    } else {
+        Message::from_slice(body.as_slice())
+    }
 }
 
 pub fn parse_feed(header: &Header, body: &Vec<u8>) -> Result<Feed, io::Error> {

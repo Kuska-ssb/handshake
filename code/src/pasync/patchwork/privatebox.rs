@@ -1,9 +1,8 @@
-use super::IdentitySecret;
 use crate::pasync::crypto::ToSodiumObject;
-
-use sodiumoxide::crypto::sign::{PublicKey,SecretKey};
 use crate::pasync::util::to_ioerr;
-use sodiumoxide::crypto::{hash::sha256, auth, sign::ed25519, scalarmult::curve25519, secretbox};
+
+use sodiumoxide::crypto::sign::SecretKey;
+use sodiumoxide::crypto::{sign::ed25519, scalarmult::curve25519, secretbox};
 use async_std::io;
 
 const SUFFIX : &str = ".box";
@@ -123,6 +122,7 @@ fn decipher(ciphertext : &[u8], sk : &SecretKey) -> Result<Option<Vec<u8>>,io::E
 
 mod test {
     use super::*;
+    use crate::pasync::patchwork::IdentitySecret;
     
     #[test]
     fn test_msg_cipher_to_one() -> Result<(),io::Error> {
@@ -168,22 +168,6 @@ mod test {
             let plaintext_1 = decipher(&ciphertext, sk)?.unwrap();
             assert_eq!(plaintext.to_vec(),plaintext_1);    
         }
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_cipher_mine() -> Result<(),io::Error> {
-        let msg = r#"E7AiHjdnail0QakQjw/4PTqwQE8HSr/zU/JgZIWvz+03l4pAEbwIAmmhHImFLa6zGAJpoxnDvVt7ycXGJ+XocT83LZhbG9HwS3nSRsQfKzREg/Ho3rWxKAzbJo8euNM3GtcxM/Qj6o2/AU9Sz6RdLe7X/Dnv+NxFDLJrwMOEp4NjlWHjfdxhqCzv6r3F+0a45vL5soPdyWPBy+Zq8lydfiE/Hhrkou/DwQEZcfMgaLu0mRL4umzv/IsJJiMaA78nJs6hsgQZYuunaa/jNKKRNa7fB+IGzILaA5D6Q+FOCDZPT6n43XE/IimNa+OQSXtnctOildPLwMWNjD0+aKsUPQN5ABlUQjP8dewrQ83T1fxd+ospqyVwQF0tU+q1SvNraFZREhJ6njrbTEnQWfQqsRu7djnLI64edNbDhypagYVWQ2PWXq05wEKsAwYqY8auzbCCFXyVvLhSvRM1YH7Ue/bWNiFSUgJGBhSYfoy8ugdGhNsgmsSRtmjVQmH3uDuc4uaKZU20wqzIvNCNrmJ02iMa1kTjjBggN6fak4csmtr5muogz7hoFCSCB7jAMdiPusi4SHoCWR8eXir8szyKQJn9FPNZwejX0crVUOWX9E3JzK7s7Qw6kcIEBFqOdLzYBJ7hdTh6uVtKjDjtIUji6HoWmxUAj3DG6wUUxGB+ScFylU7bp/87R3cfdZZ35FiCh2MVM9OYAmMfzfp545LJzqhzB+F7uGTcVi4YCZ7ztE4UEgUHhB7Hi/kfctP6x/9gT5LhFHsO0FmTF46kwAzKuOs1f1rhL7pziVJX2RvLThX1A20DjoysTocgXN/ee8qLIDeEJVAc9EwC1P36na1I1npIewFH20WScdES6z85zYlNxQDfhdXaaHOqjGsF5PJj4U8=.box"#;
-        let msg = &msg.as_bytes()[..msg.len()-SUFFIX.len()];
-        let msg = base64::decode(msg).map_err(to_ioerr)?;
-
-        println!("{:?}",msg.len());
-
-        let id = IdentitySecret::from_local_config()?;
-        let wat = decipher(&msg, &id.sk)?.unwrap();
-
-        println!("***********{:?}",String::from_utf8_lossy(&wat));
 
         Ok(())
     }

@@ -17,7 +17,7 @@ where
     R: Read+Unpin,
     W: Write+Unpin,
     F: Fn(&Header,&Vec<u8>)->io::Result<T>,
-    T: Debug+serde::Deserialize<'a>
+    T: Debug
 {
     loop {
         let (header,body) = client.rpc().recv().await?;
@@ -34,13 +34,18 @@ where
     F: Fn(&Header,&Vec<u8>)->io::Result<T>,
     T: Debug+serde::Deserialize<'a>
 {
+    let mut i =0;
     loop {
         let (header,body) = client.rpc().recv().await?;
         if header.req_no == req_no {
             if !header.is_end_or_error {
+                i+=1;
+                if i % 10000 == 0 {
+                    println!("{}",i);
+                } 
                 match f(&header,&body) {
-                    Ok(res) => println!("{:?}",res),
-                    Err(err) => println!(" 😢 Failed :( {:?}",err),
+                    Ok(res) => {  println!("{:?}",res) },
+                    Err(err) => println!(" 😢 Failed :( {:?} {}",err,String::from_utf8_lossy(&body)),
                 }
             } else {
                 println!("STREAM FINISHED");
@@ -131,8 +136,8 @@ async fn main() -> io::Result<()> {
                 };
 
                 let show_private = |header: &Header, body: &Vec<u8>| {
-                    let msg = parse_feed(header,body)?;
-                    if let serde_json::Value::String(content) = msg.value.content {
+                    let msg = parse_feed(header,body)?.into_message()?;
+                    if let serde_json::Value::String(content) = msg.content() {
                         if is_privatebox(&content) {
                             let ret = privatebox_decipher(&content, &sk)?
                                 .unwrap_or("".to_string());

@@ -1,7 +1,9 @@
-use sodiumoxide::crypto::sign::ed25519;
 use std::io;
 use std::string::ToString;
+
+use sodiumoxide::crypto::sign::ed25519;
 use sodiumoxide::crypto::auth;
+
 use crate::pasync::crypto::ToSodiumObject;
 
 const CURVE_ED25519 : &str = "ed25519";
