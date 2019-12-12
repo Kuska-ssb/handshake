@@ -34,17 +34,12 @@ where
     F: Fn(&Header,&Vec<u8>)->io::Result<T>,
     T: Debug+serde::Deserialize<'a>
 {
-    let mut i =0;
     loop {
         let (header,body) = client.rpc().recv().await?;
         if header.req_no == req_no {
             if !header.is_end_or_error {
-                i+=1;
-                if i % 10000 == 0 {
-                    println!("{}",i);
-                } 
                 match f(&header,&body) {
-                    Ok(res) => {  println!("{:?}",res) },
+                    Ok(res) => { println!("{:?}",res) },
                     Err(err) => println!(" 😢 Failed :( {:?} {}",err,String::from_utf8_lossy(&body)),
                 }
             } else {
@@ -61,7 +56,7 @@ async fn main() -> io::Result<()> {
     env_logger::init();
     log::set_max_level(log::LevelFilter::max());
 
-    let IdentitySecret{pk,sk,id} = IdentitySecret::from_local_config()
+    let IdentitySecret{pk,sk,..} = IdentitySecret::from_local_config()
         .expect("read local secret");
 
     let socket = TcpStream::connect("127.0.0.1:8008").await?;
