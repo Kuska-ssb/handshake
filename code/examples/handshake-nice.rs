@@ -6,7 +6,8 @@ use std::env;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 
-use code::handshake::{handshake_client_sync, handshake_server_sync, SharedSecret};
+use code::handshake::SharedSecret;
+use code::handshake_sync::{self, handshake_client, handshake_server};
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -30,8 +31,8 @@ fn test_server(
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
-) -> io::Result<()> {
-    let handshake = handshake_server_sync(&socket, net_id, pk, sk)?;
+) -> handshake_sync::Result<()> {
+    let handshake = handshake_server(&socket, net_id, pk, sk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);
@@ -44,19 +45,19 @@ fn test_client(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
-) -> io::Result<()> {
-    let handshake = handshake_client_sync(&socket, net_id, pk, sk, server_pk)?;
+) -> handshake_sync::Result<()> {
+    let handshake = handshake_client(&socket, net_id, pk, sk, server_pk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         usage(&args[0]);
-        return Ok(());
+        return;
     }
     let net_id_hex = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
     let net_id = auth::Key::from_slice(&hex::decode(net_id_hex).unwrap()).unwrap();
@@ -69,27 +70,27 @@ fn main() -> io::Result<()> {
         "client" => {
             if args.len() < 4 {
                 usage(&args[0]);
-                return Ok(());
+                return;
             }
             let server_pk_buf = base64::decode_config(args[3].as_str(), base64::STANDARD).unwrap();
             let server_pk = ed25519::PublicKey::from_slice(&server_pk_buf).unwrap();
-            let socket = TcpStream::connect(args[2].as_str())?;
-            test_client(socket, net_id, pk, sk, server_pk)
+            let socket = TcpStream::connect(args[2].as_str()).unwrap();
+            test_client(socket, net_id, pk, sk, server_pk).unwrap();
         }
         "server" => {
             if args.len() < 3 {
                 usage(&args[0]);
-                return Ok(());
+                return;
             }
             let listener = TcpListener::bind(args[2].as_str()).unwrap();
             println!(
                 "Listening for a handshake via TCP at {} ...",
                 args[2].as_str()
             );
-            let (socket, addr) = listener.accept()?;
+            let (socket, addr) = listener.accept().unwrap();
             println!("Client {} connected", addr);
-            test_server(socket, net_id, pk, sk)
+            test_server(socket, net_id, pk, sk).unwrap();
         }
-        _ => Ok(()),
+        _ => {}
     }
 }

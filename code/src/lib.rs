@@ -12,4 +12,5 @@ pub mod utils;
 
 pub mod boxstream;
 pub mod handshake;
+pub mod handshake_sync;
 pub mod pasync;

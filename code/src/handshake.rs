@@ -1,7 +1,36 @@
 extern crate sodiumoxide;
 
+use core::result;
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
-use std::{io, io::Read, io::Result, io::Write};
+
+#[derive(Debug)]
+pub enum ScalarMultSk {
+    Ephemeral,
+    LongTerm,
+}
+
+#[derive(Debug)]
+pub enum ScalarMultPk {
+    ClientEphemeral,
+    ClientLongTerm,
+    ServerEphemeral,
+    ServerLongTerm,
+}
+
+#[derive(Debug)]
+pub enum Error {
+    RecvServerHelloAuth,
+    RecvServerAcceptSecretbox,
+    RecvServerAcceptEd25519,
+    RecvClientHelloAuth,
+    RecvClientAuthSecretbox,
+    RecvClientAuthEd25519,
+    SendClientAuthScalarmult(ScalarMultSk, ScalarMultPk),
+    RecvClientHelloScalarmult(ScalarMultSk, ScalarMultPk),
+    RecvClientAuthScalarmult(ScalarMultSk, ScalarMultPk),
+}
+
+pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
 #[allow(non_snake_case)]
@@ -99,17 +128,6 @@ impl State for SendServerAccept {}
 
 impl State for Complete {}
 
-fn error_new(msg: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, msg)
-}
-
-fn scalarmult_error_new(fn_name: &str, a: &str, b: &str) -> io::Error {
-    error_new(&format!(
-        "curve25519::scalarmult({}, {}) failed in {}",
-        a, b, fn_name
-    ))
-}
-
 // Client
 impl Handshake<SendClientHello> {
     pub fn new_client(
@@ -135,17 +153,17 @@ impl Handshake<SendClientHello> {
 pub const CLIENT_HELLO_BYTES: usize = 64;
 
 impl Handshake<SendClientHello> {
-    pub fn send_client_hello(self, send_buf: &mut [u8]) -> Result<Handshake<RecvServerHello>> {
+    pub fn send_client_hello(self, send_buf: &mut [u8]) -> Handshake<RecvServerHello> {
         concat_into!(
             send_buf,
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
             self.base.ephemeral_pk.as_ref()
         );
         let state = RecvServerHello;
-        Ok(Handshake {
+        Handshake {
             base: self.base,
             state,
-        })
+        }
     }
     pub const fn send_bytes(&self) -> usize {
         CLIENT_HELLO_BYTES
@@ -161,7 +179,7 @@ impl Handshake<RecvServerHello> {
             server_ephemeral_pk.as_ref(),
             &self.base.net_id,
         ) {
-            return Err(error_new("auth::verify failed in recv_server_hello"));
+            return Err(Error::RecvServerHelloAuth);
         }
         Ok(Handshake {
             base: self.base,
@@ -183,17 +201,24 @@ impl Handshake<SendClientAuth> {
         send_buf: &mut [u8],
         server_pk: ed25519::PublicKey,
     ) -> Result<Handshake<RecvServerAccept>> {
-        let fn_error = |a, b| Err(scalarmult_error_new("send_client_auth", a, b));
+        let fn_error = |a, b| Err(Error::SendClientAuthScalarmult(a, b));
         let shared_secret = SharedSecret {
             ab: curve25519::scalarmult(&self.base.ephemeral_sk, &self.state.server_ephemeral_pk)
-                .or(fn_error("ephemeral_sk", "server_ephemeral_pk"))?,
-            aB: curve25519::scalarmult(&self.base.ephemeral_sk, &server_pk.to_curve25519())
-                .or(fn_error("ephemeral_sk", "server_pk"))?,
+                .or(fn_error(
+                    ScalarMultSk::Ephemeral,
+                    ScalarMultPk::ServerEphemeral,
+                ))?,
+            aB: curve25519::scalarmult(&self.base.ephemeral_sk, &server_pk.to_curve25519()).or(
+                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ServerLongTerm),
+            )?,
             Ab: curve25519::scalarmult(
                 &self.base.sk.to_curve25519(),
                 &self.state.server_ephemeral_pk,
             )
-            .or(fn_error("sk", "server_ephemeral_pk"))?,
+            .or(fn_error(
+                ScalarMultSk::LongTerm,
+                ScalarMultPk::ServerEphemeral,
+            ))?,
         };
 
         let sig = ed25519::sign_detached(
@@ -260,9 +285,7 @@ impl Handshake<RecvServerAccept> {
                 .0,
             ),
         )
-        .or(Err(error_new(
-            "secretbox::open failed in recv_server_accept",
-        )))?;
+        .or(Err(Error::RecvServerAcceptSecretbox))?;
         let dec_buf = enc_buf;
         let sig = ed25519::Signature::from_slice(&dec_buf).unwrap();
         if !ed25519::verify_detached(
@@ -276,9 +299,7 @@ impl Handshake<RecvServerAccept> {
             .concat(),
             &self.state.server_pk,
         ) {
-            return Err(error_new(
-                "ed25519::verify_detached failed in recv_server_accept",
-            ));
+            return Err(Error::RecvServerAcceptEd25519);
         }
         Ok(Handshake {
             base: self.base,
@@ -326,14 +347,16 @@ impl Handshake<RecvClientHello> {
             client_ephemeral_pk.as_ref(),
             &self.base.net_id,
         ) {
-            return Err(error_new("auth::verify failed in recv_client_hello"));
+            return Err(Error::RecvClientHelloAuth);
         }
-        let fn_error = |a, b| Err(scalarmult_error_new("recv_client_hello", a, b));
+        let fn_error = |a, b| Err(Error::RecvClientHelloScalarmult(a, b));
         let shared_secret_partial = SharedSecretPartial {
-            ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_ephemeral_pk)
-                .or(fn_error("ephemeral_sk", "client_ephemeral_pk"))?,
-            aB: curve25519::scalarmult(&self.base.sk.to_curve25519(), &client_ephemeral_pk)
-                .or(fn_error("sk", "client_ephemeral_pk"))?,
+            ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_ephemeral_pk).or(
+                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientEphemeral),
+            )?,
+            aB: curve25519::scalarmult(&self.base.sk.to_curve25519(), &client_ephemeral_pk).or(
+                fn_error(ScalarMultSk::LongTerm, ScalarMultPk::ClientEphemeral),
+            )?,
         };
         Ok(Handshake {
             base: self.base,
@@ -351,19 +374,19 @@ impl Handshake<RecvClientHello> {
 pub const SERVER_HELLO_BYTES: usize = 64;
 
 impl Handshake<SendServerHello> {
-    pub fn send_server_hello(self, send_buf: &mut [u8]) -> Result<Handshake<RecvClientAuth>> {
+    pub fn send_server_hello(self, send_buf: &mut [u8]) -> Handshake<RecvClientAuth> {
         concat_into!(
             send_buf,
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
             self.base.ephemeral_pk.as_ref()
         );
-        Ok(Handshake {
+        Handshake {
             base: self.base,
             state: RecvClientAuth {
                 client_ephemeral_pk: self.state.client_ephemeral_pk,
                 shared_secret_partial: self.state.shared_secret_partial,
             },
-        })
+        }
     }
     pub const fn send_bytes(&self) -> usize {
         SERVER_HELLO_BYTES
@@ -389,7 +412,7 @@ impl Handshake<RecvClientAuth> {
                 .0,
             ),
         )
-        .or(Err(error_new("secretbox::open failed in recv_client_auth")))?;
+        .or(Err(Error::RecvClientAuthSecretbox))?;
         let dec_buf = enc_buf;
         let client_sig = ed25519::Signature::from_slice(&dec_buf[..64]).unwrap();
         let client_pk = ed25519::PublicKey::from_slice(&dec_buf[64..]).unwrap();
@@ -403,16 +426,15 @@ impl Handshake<RecvClientAuth> {
             .concat(),
             &client_pk,
         ) {
-            return Err(error_new(
-                "ed25519::verify_detached failed in recv_client_auth",
-            ));
+            return Err(Error::RecvClientAuthEd25519);
         }
-        let fn_error = |a, b| Err(scalarmult_error_new("recv_client_auth", a, b));
+        let fn_error = |a, b| Err(Error::RecvClientHelloScalarmult(a, b));
         let shared_secret = SharedSecret {
             ab: self.state.shared_secret_partial.ab,
             aB: self.state.shared_secret_partial.aB,
-            Ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_pk.to_curve25519())
-                .or(fn_error("ephemeral_sk", "client_pk"))?,
+            Ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_pk.to_curve25519()).or(
+                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientLongTerm),
+            )?,
         };
         Ok(Handshake {
             base: self.base,
@@ -432,7 +454,7 @@ impl Handshake<RecvClientAuth> {
 pub const SERVER_ACCEPT_BYTES: usize = 80;
 
 impl Handshake<SendServerAccept> {
-    pub fn send_server_accept(self, send_buf: &mut [u8]) -> Result<Handshake<Complete>> {
+    pub fn send_server_accept(self, send_buf: &mut [u8]) -> Handshake<Complete> {
         let sig = ed25519::sign_detached(
             &concat!(
                 auth::KEYBYTES
@@ -463,14 +485,14 @@ impl Handshake<SendServerAccept> {
         );
         send_buf[..secretbox::MACBYTES].copy_from_slice(tag.as_ref());
 
-        Ok(Handshake {
+        Handshake {
             base: self.base,
             state: Complete {
                 peer_pk: self.state.client_pk,
                 peer_ephemeral_pk: self.state.client_ephemeral_pk,
                 shared_secret: self.state.shared_secret,
             },
-        })
+        }
     }
     pub const fn send_bytes(&self) -> usize {
         SERVER_ACCEPT_BYTES
@@ -500,65 +522,6 @@ impl Handshake<Complete> {
     }
 }
 
-pub fn handshake_client_sync<T: Read + Write>(
-    mut stream: T,
-    net_id: auth::Key,
-    pk: ed25519::PublicKey,
-    sk: ed25519::SecretKey,
-    server_pk: ed25519::PublicKey,
-) -> Result<HandshakeComplete> {
-    let mut send_buf = [0; 128];
-    let mut recv_buf = [0; 128];
-    let handshake = Handshake::new_client(net_id, pk, sk);
-
-    let mut buf = &mut send_buf[..handshake.send_bytes()];
-    let handshake = handshake.send_client_hello(&mut buf)?;
-    stream.write_all(&buf)?;
-
-    let mut buf = &mut recv_buf[..handshake.recv_bytes()];
-    stream.read_exact(&mut buf)?;
-    let handshake = handshake.recv_server_hello(&buf)?;
-
-    let mut buf = &mut send_buf[..handshake.send_bytes()];
-    let handshake = handshake.send_client_auth(&mut buf, server_pk)?;
-    stream.write_all(&buf)?;
-
-    let mut buf = &mut recv_buf[..handshake.recv_bytes()];
-    stream.read_exact(&mut buf)?;
-    let handshake = handshake.recv_server_accept(&mut buf)?;
-
-    Ok(handshake.complete())
-}
-
-pub fn handshake_server_sync<T: Read + Write>(
-    mut stream: T,
-    net_id: auth::Key,
-    pk: ed25519::PublicKey,
-    sk: ed25519::SecretKey,
-) -> Result<HandshakeComplete> {
-    let mut send_buf = [0; 128];
-    let mut recv_buf = [0; 128];
-    let handshake = Handshake::new_server(net_id, pk, sk);
-
-    let mut buf = &mut recv_buf[..handshake.recv_bytes()];
-    stream.read_exact(&mut buf)?;
-    let handshake = handshake.recv_client_hello(&mut buf)?;
-
-    let mut buf = &mut send_buf[..handshake.send_bytes()];
-    let handshake = handshake.send_server_hello(&mut buf)?;
-    stream.write_all(&mut buf)?;
-
-    let mut buf = &mut recv_buf[..handshake.recv_bytes()];
-    stream.read_exact(&mut buf)?;
-    let handshake = handshake.recv_client_auth(&mut buf)?;
-
-    let mut buf = &mut send_buf[..handshake.send_bytes()];
-    let handshake = handshake.send_server_accept(&mut buf)?;
-    stream.write_all(&mut buf)?;
-
-    Ok(handshake.complete())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,13 +546,13 @@ mod tests {
 
         let (hs_client, hs_server) = {
             let mut client_buf = [0; CLIENT_HELLO_BYTES];
-            let hs_client = hs_client.send_client_hello(&mut client_buf).unwrap();
+            let hs_client = hs_client.send_client_hello(&mut client_buf);
             let hs_server = hs_server.recv_client_hello(&mut client_buf).unwrap();
             (hs_client, hs_server)
         };
         let (hs_client, hs_server) = {
             let mut server_buf = [0; SERVER_HELLO_BYTES];
-            let hs_server = hs_server.send_server_hello(&mut server_buf).unwrap();
+            let hs_server = hs_server.send_server_hello(&mut server_buf);
             let hs_client = hs_client.recv_server_hello(&mut server_buf).unwrap();
             (hs_client, hs_server)
         };
@@ -603,7 +566,7 @@ mod tests {
         };
         let (hs_client, hs_server) = {
             let mut server_buf = [0; SERVER_ACCEPT_BYTES];
-            let hs_server = hs_server.send_server_accept(&mut server_buf).unwrap();
+            let hs_server = hs_server.send_server_accept(&mut server_buf);
             let hs_client = hs_client.recv_server_accept(&mut server_buf).unwrap();
             (hs_client, hs_server)
         };
