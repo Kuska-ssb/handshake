@@ -71,15 +71,13 @@ impl KeyNonce {
         (send_key_nonce, recv_key_nonce)
     }
 
-    pub fn increment_be_inplace(&mut self) {
-        let mut byte_no: i8 = (self.nonce.0.len() - 1) as i8;
-        while byte_no >= 0 {
-            let (inc, _) = self.nonce.0[byte_no as usize].overflowing_add(1);
-            self.nonce.0[byte_no as usize] = inc;
-            if self.nonce.0[byte_no as usize] > 0 {
-                return;
+    pub fn increment_nonce_be_inplace(&mut self) {
+        for n in (0..self.nonce.0.len()).rev() {
+            let (inc, _) = self.nonce.0[n].overflowing_add(1);
+            self.nonce.0[n] = inc;
+            if self.nonce.0[n] != 0 {
+                break;
             }
-            byte_no -= 1;
         }
     }
 }
@@ -122,9 +120,9 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) 
     let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
 
     let header_nonce = key_nonce.nonce;
-    key_nonce.increment_be_inplace();
+    key_nonce.increment_nonce_be_inplace();
     let body_nonce = key_nonce.nonce;
-    key_nonce.increment_be_inplace();
+    key_nonce.increment_nonce_be_inplace();
     debug!(
         "encrypt header_nonce: {}",
         hex::encode(header_nonce.as_ref())
@@ -168,7 +166,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> io::Re
         &key_nonce.key,
     ) {
         Ok(()) => {
-            key_nonce.increment_be_inplace();
+            key_nonce.increment_nonce_be_inplace();
             Ok(Header::from_slice(&header_body_buf).unwrap())
         }
         Err(()) => {
@@ -205,7 +203,7 @@ fn decrypt_box_stream_body(
         &key_nonce.key,
     ) {
         Ok(()) => {
-            key_nonce.increment_be_inplace();
+            key_nonce.increment_nonce_be_inplace();
             Ok(header.body_len)
         }
         Err(()) => {
@@ -391,6 +389,22 @@ mod tests {
     const NONCE_A_HEX: &str = "a20fa8fe59a80f5f07c80265e5e7664582f0f553f36cd6ce";
     const KEY_B_HEX: &str = "9bf1ec7af3f80934474e5ff73e27f2f5070f4fe4d80511923b7acb686463bfcc";
     const NONCE_B_HEX: &str = "799762378d9e1d0a8a510a249dc4e76788d6ff9993efc5df";
+
+    #[test]
+    fn test_keynonce() {
+        const KEY_HEX: &str = "8198e2d3456f022b2020f36ce874ad8b337a1c2da13f69f6458fd63415a51943";
+        const NONCE0_HEX: &str = "00000000000000000000000000000000000000000a00ffff";
+        const NONCE1_HEX: &str = "00000000000000000000000000000000000000000a010000";
+        let key = secretbox::Key::from_slice(&hex::decode(KEY_HEX).unwrap()).unwrap();
+        let nonce0 = secretbox::Nonce::from_slice(&hex::decode(NONCE0_HEX).unwrap()).unwrap();
+        let nonce1 = secretbox::Nonce::from_slice(&hex::decode(NONCE1_HEX).unwrap()).unwrap();
+        let mut key_nonce = KeyNonce {
+            key: key,
+            nonce: nonce0,
+        };
+        key_nonce.increment_nonce_be_inplace();
+        assert_eq!(key_nonce.nonce, nonce1);
+    }
 
     struct Peer {
         send_key_nonce: KeyNonce,

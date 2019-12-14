@@ -10,7 +10,7 @@ use crossbeam::thread;
 use log::debug;
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
-use code::boxstream::BoxStream;
+use code::boxstream::{BoxStream, KeyNonce};
 use code::handshake::SharedSecret;
 use code::handshake_sync::{self, handshake_client, handshake_server};
 
@@ -42,8 +42,9 @@ fn test_server(
     debug!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);
 
+    let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, 0x8000, handshake).split_read_write();
+        BoxStream::new(&socket, &socket, 0x8000, key_nonce_send, key_nonce_recv).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
@@ -73,8 +74,9 @@ fn test_client(
     debug!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);
 
+    let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, 0x8000, handshake).split_read_write();
+        BoxStream::new(&socket, &socket, 0x8000, key_nonce_send, key_nonce_recv).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
