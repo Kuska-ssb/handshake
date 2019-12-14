@@ -3,9 +3,9 @@ extern crate sodiumoxide;
 
 use log::debug;
 
-use crate::handshake::{HandshakeComplete, SharedSecret};
+use crate::handshake::HandshakeComplete;
 
-use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
+use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
 use std::{cmp, io, io::Read, io::Write};
 
 // Length of encrypted body (with MAC detached)
@@ -232,9 +232,9 @@ impl<R: Read, W: Write> BoxStream<R, W> {
         read_stream: R,
         write_stream: W,
         recv_buf_len: usize,
-        handshake_complete: HandshakeComplete,
+        send_key_nonce: KeyNonce,
+        recv_key_nonce: KeyNonce,
     ) -> Self {
-        let (send_key_nonce, recv_key_nonce) = KeyNonce::from_handshake(handshake_complete);
         let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
         let reader = BoxStreamRead {
             stream: read_stream,
@@ -387,43 +387,48 @@ impl<W: Write> Write for BoxStreamWrite<W> {
 mod tests {
     use super::*;
 
-    const key_a_hex: &str = "8198e2d3456f022b2020f36ce874ad8b337a1c2da13f69f6458fd63415a51943";
-    const nonce_a_hex: &str = "a20fa8fe59a80f5f07c80265e5e7664582f0f553f36cd6ce";
-    const key_b_hex: &str = "9bf1ec7af3f80934474e5ff73e27f2f5070f4fe4d80511923b7acb686463bfcc";
-    const nonce_b_hex: &str = "799762378d9e1d0a8a510a249dc4e76788d6ff9993efc5df";
+    const KEY_A_HEX: &str = "8198e2d3456f022b2020f36ce874ad8b337a1c2da13f69f6458fd63415a51943";
+    const NONCE_A_HEX: &str = "a20fa8fe59a80f5f07c80265e5e7664582f0f553f36cd6ce";
+    const KEY_B_HEX: &str = "9bf1ec7af3f80934474e5ff73e27f2f5070f4fe4d80511923b7acb686463bfcc";
+    const NONCE_B_HEX: &str = "799762378d9e1d0a8a510a249dc4e76788d6ff9993efc5df";
 
     struct Peer {
         send_key_nonce: KeyNonce,
         recv_key_nonce: KeyNonce,
     }
 
+    fn load_peers() -> (Peer, Peer) {
+        let key_a = secretbox::Key::from_slice(&hex::decode(KEY_A_HEX).unwrap()).unwrap();
+        let nonce_a = secretbox::Nonce::from_slice(&hex::decode(NONCE_A_HEX).unwrap()).unwrap();
+        let key_b = secretbox::Key::from_slice(&hex::decode(KEY_B_HEX).unwrap()).unwrap();
+        let nonce_b = secretbox::Nonce::from_slice(&hex::decode(NONCE_B_HEX).unwrap()).unwrap();
+
+        let peer_a = Peer {
+            send_key_nonce: KeyNonce {
+                key: key_a.clone(),
+                nonce: nonce_a,
+            },
+            recv_key_nonce: KeyNonce {
+                key: key_b.clone(),
+                nonce: nonce_b,
+            },
+        };
+        let peer_b = Peer {
+            send_key_nonce: KeyNonce {
+                key: key_b.clone(),
+                nonce: nonce_b,
+            },
+            recv_key_nonce: KeyNonce {
+                key: key_a.clone(),
+                nonce: nonce_a,
+            },
+        };
+        (peer_a, peer_b)
+    }
+
     #[test]
     fn test_boxstream() {
-        let key_a = secretbox::Key::from_slice(&hex::decode(key_a_hex).unwrap()).unwrap();
-        let nonce_a = secretbox::Nonce::from_slice(&hex::decode(nonce_a_hex).unwrap()).unwrap();
-        let key_b = secretbox::Key::from_slice(&hex::decode(key_b_hex).unwrap()).unwrap();
-        let nonce_b = secretbox::Nonce::from_slice(&hex::decode(nonce_b_hex).unwrap()).unwrap();
-
-        let mut peer_a = Peer {
-            send_key_nonce: KeyNonce {
-                key: key_a.clone(),
-                nonce: nonce_a,
-            },
-            recv_key_nonce: KeyNonce {
-                key: key_b.clone(),
-                nonce: nonce_b,
-            },
-        };
-        let mut peer_b = Peer {
-            send_key_nonce: KeyNonce {
-                key: key_b.clone(),
-                nonce: nonce_b,
-            },
-            recv_key_nonce: KeyNonce {
-                key: key_a.clone(),
-                nonce: nonce_a,
-            },
-        };
+        let (mut peer_a, mut peer_b) = load_peers();
 
         let mut buf_a = [0; 4096];
         let mut buf_b = [0; 4096];
@@ -434,7 +439,6 @@ mod tests {
         // Send two messages from A to B
         for msg_a in &[msg_a0, msg_a1] {
             // A
-            let msg_a: Vec<u8> = (0..=255).collect();
             let send_buf_a = {
                 let n = encrypt_box_stream_msg(&mut peer_a.send_key_nonce, &msg_a, &mut buf_a);
                 // Assert that 256 bytes have been encrypted from msg_a
@@ -458,7 +462,79 @@ mod tests {
                 &enc_body[..n]
             };
             // Assert that the decrypted message is the message that was encrypted
-            assert!(dec_msg_a == msg_a.as_slice());
+            assert!(&dec_msg_a[..] == &msg_a[..]);
         }
+    }
+
+    use std::io::{Read, Write};
+
+    use test_utils::{net, net_fragment};
+
+    use crossbeam::thread;
+
+    #[test]
+    fn test_boxstream_sync() {
+        net(|a_rd, a_wr, b_rd, b_wr| boxstream_aux(a_rd, a_wr, b_rd, b_wr));
+    }
+
+    #[test]
+    fn test_boxstream_sync_fragment() {
+        net_fragment(5, |a_rd, a_wr, b_rd, b_wr| {
+            boxstream_aux(a_rd, a_wr, b_rd, b_wr)
+        });
+    }
+
+    // Send two small messages from peer a to peer b in a boxstream
+    fn boxstream_aux<R: Read + Send, W: Write + Send>(
+        stream_a_read: R,
+        stream_a_write: W,
+        stream_b_read: R,
+        stream_b_write: W,
+    ) {
+        let (peer_a, peer_b) = load_peers();
+
+        let msg_a0: Vec<u8> = (0..=255).collect();
+        let msg_a1: Vec<u8> = (0..=255).rev().collect();
+        let msg_a0_cpy = msg_a0.clone();
+        let msg_a1_cpy = msg_a1.clone();
+
+        thread::scope(|s| {
+            let bs_a = BoxStream::new(
+                stream_a_read,
+                stream_a_write,
+                0x8000,
+                peer_a.send_key_nonce,
+                peer_a.recv_key_nonce,
+            );
+            let (mut bs_a_read, _) = bs_a.split_read_write();
+
+            let bs_b = BoxStream::new(
+                stream_b_read,
+                stream_b_write,
+                0x8000,
+                peer_b.send_key_nonce,
+                peer_b.recv_key_nonce,
+            );
+            let (_, mut bs_b_write) = bs_b.split_read_write();
+
+            let handle_a = s.spawn(move |_| {
+                let mut buf = [0; 256];
+                bs_a_read.read_exact(&mut buf).unwrap();
+                assert!(&buf[..] == &msg_a0_cpy[..]);
+                bs_a_read.read_exact(&mut buf).unwrap();
+                assert!(&buf[..] == &msg_a1_cpy[..]);
+            });
+
+            let handle_b = s.spawn(move |_| {
+                bs_b_write.write_all(&msg_a0).unwrap();
+                bs_b_write.flush().unwrap();
+                bs_b_write.write_all(&msg_a1).unwrap();
+                bs_b_write.flush().unwrap();
+            });
+
+            handle_a.join().unwrap();
+            handle_b.join().unwrap();
+        })
+        .unwrap();
     }
 }

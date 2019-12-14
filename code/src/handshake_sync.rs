@@ -1,5 +1,6 @@
 use std::{convert, io, io::Read, io::Write};
 
+// use log::debug;
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
 use crate::handshake::{self, Handshake, HandshakeComplete};
@@ -79,4 +80,73 @@ pub fn handshake_server<T: Read + Write>(
     stream.write_all(&mut send_buf)?;
 
     Ok(handshake.complete())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::io::{Read, Write};
+
+    use test_utils::{net, net_fragment};
+
+    use crossbeam::thread;
+
+    const NET_ID_HEX: &str = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
+    const CLIENT_SEED_HEX: &str =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+    const SERVER_SEED_HEX: &str =
+        "0000000000000000000000000000000000000000000000000000000000000001";
+
+    // Perform a handshake between two connected streams
+    fn handshake_aux<T: Write + Read + Send>(stream_client: T, stream_server: T) {
+        let net_id = auth::Key::from_slice(&hex::decode(NET_ID_HEX).unwrap()).unwrap();
+        let (client_pk, client_sk) = ed25519::keypair_from_seed(
+            &ed25519::Seed::from_slice(&hex::decode(CLIENT_SEED_HEX).unwrap()).unwrap(),
+        );
+        let (server_pk, server_sk) = ed25519::keypair_from_seed(
+            &ed25519::Seed::from_slice(&hex::decode(SERVER_SEED_HEX).unwrap()).unwrap(),
+        );
+
+        let (client_handshake, server_handshake) = thread::scope(|s| {
+            let net_id_cpy = net_id.clone();
+
+            let handle_client = s.spawn(move |_| {
+                handshake_client(stream_client, net_id, client_pk, client_sk, server_pk).unwrap()
+            });
+
+            let handle_server = s.spawn(move |_| {
+                handshake_server(stream_server, net_id_cpy, server_pk, server_sk).unwrap()
+            });
+
+            (handle_client.join().unwrap(), handle_server.join().unwrap())
+        })
+        .unwrap();
+
+        assert_eq!(client_handshake.net_id, server_handshake.net_id);
+        assert_eq!(
+            client_handshake.shared_secret,
+            server_handshake.shared_secret
+        );
+        assert_eq!(client_handshake.pk, server_handshake.peer_pk);
+        assert_eq!(
+            client_handshake.ephemeral_pk,
+            server_handshake.peer_ephemeral_pk
+        );
+        assert_eq!(client_handshake.peer_pk, server_handshake.pk);
+        assert_eq!(
+            client_handshake.peer_ephemeral_pk,
+            server_handshake.ephemeral_pk
+        );
+    }
+
+    #[test]
+    fn test_handshake_sync() {
+        net(|a, _, b, _| handshake_aux(a, b));
+    }
+
+    #[test]
+    fn test_handshake_sync_fragment() {
+        net_fragment(5, |a, _, b, _| handshake_aux(a, b));
+    }
 }

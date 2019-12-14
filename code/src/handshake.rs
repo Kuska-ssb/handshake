@@ -1,6 +1,5 @@
 extern crate sodiumoxide;
 
-use core::result;
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 
 #[derive(Debug)]
