@@ -14,14 +14,23 @@ use code::boxstream::{BoxStream, KeyNonce};
 use code::handshake::SharedSecret;
 use code::handshake_sync::{self, handshake_client, handshake_server};
 
+const BUF_SIZE: usize = 0x8000;
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: {} [client/server] address", args[0]);
+    if args.len() < 3 {
+        eprintln!("Usage: {} [client/server] address [--buf]", args[0]);
         return;
     }
     let mode = args[1].as_str();
     let addr = args[2].as_str();
+    let mut buffered = false;
+    if args.len() > 3 {
+        if args[3].as_str() == "--buf" {
+            eprintln!("Using BufReader and BufWriter");
+            buffered = true;
+        }
+    }
 
     let net_id_hex = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
     let net_id = auth::Key::from_slice(&hex::decode(net_id_hex).unwrap()).unwrap();
@@ -59,17 +68,55 @@ fn main() {
 
     let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, 0x8000, key_nonce_send, key_nonce_recv).split_read_write();
+        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
 
     match mode {
         "client" => {
             // stdin -> boxstream
-            io::copy(&mut io::stdin(), &mut box_stream_write).unwrap();
+            if buffered {
+                io::copy(
+                    &mut io::BufReader::with_capacity(BUF_SIZE, &mut io::stdin()),
+                    &mut io::BufWriter::with_capacity(BUF_SIZE, &mut box_stream_write),
+                )
+                .unwrap();
+            } else {
+                io::copy(&mut io::stdin(), &mut box_stream_write).unwrap();
+            }
         }
         "server" => {
             // boxstream -> stdout
-            io::copy(&mut box_stream_read, &mut io::stdout()).unwrap();
+            if buffered {
+                io::copy(
+                    &mut io::BufReader::with_capacity(BUF_SIZE, &mut box_stream_read),
+                    &mut io::BufWriter::with_capacity(BUF_SIZE, &mut io::stdout()),
+                )
+                .unwrap();
+            } else {
+                io::copy(&mut box_stream_read, &mut io::stdout()).unwrap();
+            }
         }
         _ => unreachable!(),
+    }
+}
+
+// Copied from https://doc.rust-lang.org/src/std/io/util.rs.html#43 to be used with custom buffer
+// size.
+pub fn copy<R: ?Sized, W: ?Sized>(reader: &mut R, writer: &mut W) -> io::Result<u64>
+where
+    R: io::Read,
+    W: io::Write,
+{
+    let mut buf = [0; BUF_SIZE];
+
+    let mut written = 0;
+    loop {
+        let len = match reader.read(&mut buf) {
+            Ok(0) => return Ok(written),
+            Ok(len) => len,
+            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        writer.write_all(&buf[..len])?;
+        written += len as u64;
     }
 }

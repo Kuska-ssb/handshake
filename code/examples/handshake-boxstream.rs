@@ -44,7 +44,7 @@ fn test_server(
 
     let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, 0x8000, key_nonce_send, key_nonce_recv).split_read_write();
+        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
@@ -76,7 +76,7 @@ fn test_client(
 
     let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, 0x8000, key_nonce_send, key_nonce_recv).split_read_write();
+        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());

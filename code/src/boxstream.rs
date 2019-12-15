@@ -1,8 +1,6 @@
 extern crate log;
 extern crate sodiumoxide;
 
-use log::debug;
-
 use crate::handshake::HandshakeComplete;
 
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
@@ -52,22 +50,6 @@ impl KeyNonce {
             nonce: secretbox::Nonce::from_slice(&recv_hmac_nonce.as_ref()[..secretbox::NONCEBYTES])
                 .unwrap(),
         };
-        debug!(
-            "key_nonce_recv.key {}",
-            hex::encode(key_nonce_recv.key.as_ref())
-        );
-        debug!(
-            "key_nonce_recv.nonce {}",
-            hex::encode(key_nonce_recv.nonce.as_ref())
-        );
-        debug!(
-            "key_nonce_send.key {}",
-            hex::encode(key_nonce_send.key.as_ref())
-        );
-        debug!(
-            "key_nonce_send.nonce {}",
-            hex::encode(key_nonce_send.nonce.as_ref())
-        );
         (key_nonce_send, key_nonce_recv)
     }
 
@@ -123,23 +105,12 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) 
     key_nonce.increment_nonce_be_inplace();
     let body_nonce = key_nonce.nonce;
     key_nonce.increment_nonce_be_inplace();
-    debug!(
-        "encrypt header_nonce: {}",
-        hex::encode(header_nonce.as_ref())
-    );
-    debug!("encrypt body_nonce: {}", hex::encode(body_nonce.as_ref()));
 
     let (header_buf, mut body_buf) =
         enc[..MSG_HEADER_LEN + body.len()].split_at_mut(MSG_HEADER_LEN);
     let (header_tag_buf, mut header_body_buf) = header_buf.split_at_mut(secretbox::MACBYTES);
     body_buf.copy_from_slice(body);
     let body_tag = secretbox::seal_detached(&mut body_buf, &body_nonce, &key_nonce.key);
-    debug!(
-        "write body ({}): {}, tag: {}",
-        body_buf.len(),
-        hex::encode(&body_buf),
-        hex::encode(&body_tag)
-    );
     let header = Header {
         body_len: body.len(),
         body_mac: body_tag,
@@ -199,12 +170,6 @@ fn decrypt_box_stream_body(
         ));
     }
     let mut body_buf = &mut buf[..header.body_len];
-    debug!(
-        "read body ({}): {}, tag: {}",
-        body_buf.len(),
-        hex::encode(&body_buf),
-        hex::encode(&header.body_mac)
-    );
     match secretbox::open_detached(
         &mut body_buf,
         &header.body_mac,
@@ -282,37 +247,21 @@ impl<R: Read, W: Write> BoxStream<R, W> {
     pub fn new(
         read_stream: R,
         write_stream: W,
-        recv_buf_len: usize,
         key_nonce_send: KeyNonce,
         key_nonce_recv: KeyNonce,
     ) -> Self {
-        let capacity = cmp::max(MSG_HEADER_LEN + MSG_BODY_MAX_LEN, recv_buf_len);
         let reader = BoxStreamRead {
             stream: read_stream,
-            key_nonce: key_nonce_recv,
-            plain: vec![0; capacity].into_boxed_slice(),
-            plain_len: 0,
-            plain_off: 0,
-            enc: vec![0; capacity].into_boxed_slice(),
-            // buf: vec![0; capacity].into_boxed_slice(),
-            // buf_cap: 0,
-            // enc: vec![0; capacity].into_boxed_slice(),
-            // enc_cap: 0,
-            // dec: vec![0; capacity].into_boxed_slice(),
-            // dec_pos: 0,
-            // dec_cap: 0,
-            // state: RecvState::ExpectHeader,
-            // need_more_bytes: true,
+            bs_recv: BoxStreamRecv {
+                key_nonce: key_nonce_recv,
+                state: RecvState::ExpectHeader,
+            },
         };
         let writer = BoxStreamWrite {
             stream: write_stream,
-            key_nonce: key_nonce_send,
-            // buf: Vec::with_capacity(MSG_BODY_MAX_LEN),
-            // buf_cap: 0,
-            // enc: Vec::with_capacity(capacity),
-            enc: vec![0; capacity],
-            // enc_pos: 0,
-            // enc_cap: 0,
+            bs_send: BoxStreamSend {
+                key_nonce: key_nonce_send,
+            },
         };
         Self { reader, writer }
     }
@@ -326,106 +275,34 @@ enum RecvState {
 
 pub struct BoxStreamRead<R> {
     stream: R,
-    key_nonce: KeyNonce,
-    plain: Box<[u8]>,
-    plain_len: usize,
-    plain_off: usize,
-    enc: Box<[u8]>,
-    // buf: Box<[u8]>,
-    // buf_cap: usize,
-    // enc: Box<[u8]>,
-    // enc_cap: usize,
-    // dec: Box<[u8]>,
-    // dec_pos: usize,
-    // dec_cap: usize,
-    // state: RecvState,
-    // need_more_bytes: bool,
+    bs_recv: BoxStreamRecv,
 }
 
-// NOTE: This read only handles one packet at a time.
-// TODO: Add a test that sends two encrypted packets at once.
 impl<R: Read> Read for BoxStreamRead<R> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        // no data available, lock until available
-        if self.plain_off == self.plain_len {
-            let mut state = RecvState::ExpectHeader;
-            let mut read_limit = MSG_HEADER_LEN;
-            let mut enc_cap = 0;
-
-            loop {
-                enc_cap += self.stream.read(&mut self.enc[enc_cap..read_limit])?;
-                if enc_cap < read_limit {
-                    continue;
-                }
-                match state {
-                    RecvState::ExpectHeader => {
-                        debug!(
-                            "read header ({}): {}",
-                            self.enc[..read_limit].len(),
-                            hex::encode(&self.enc[..read_limit])
-                        );
-                        let header = decrypt_box_stream_header(
-                            &mut self.key_nonce,
-                            &mut self.enc[..enc_cap],
-                        )?;
-                        if header.body_len > self.enc.len() {
-                            return Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                "internal buffer too small",
-                            ));
-                        }
-                        read_limit = MSG_HEADER_LEN + header.body_len;
-                        state = RecvState::ExpectBody(header);
-                    }
-                    RecvState::ExpectBody(ref header) => {
-                        let n = cmp::min(header.body_len, read_limit - MSG_HEADER_LEN);
-                        self.plain[..n]
-                            .copy_from_slice(&self.enc[MSG_HEADER_LEN..MSG_HEADER_LEN + n]);
-                        self.plain_len = decrypt_box_stream_body(
-                            header,
-                            &mut self.key_nonce,
-                            &mut self.plain[..n],
-                        )?;
-                        self.plain_off = 0;
-                        break;
-                    }
-                }
-            }
+        let mut enc = [0; MSG_HEADER_LEN + MSG_BODY_MAX_LEN];
+        let mut n = 0;
+        for _ in 0..2 {
+            let recv_bytes = self.bs_recv.recv_bytes();
+            self.stream.read_exact(&mut enc[..recv_bytes])?;
+            let (_, m) = self.bs_recv.decrypt(&enc[..recv_bytes], buf)?;
+            n += m;
         }
-
-        // read from plaintext buffer
-        let len = cmp::min(self.plain_len - self.plain_off, buf.len());
-        buf[..len].copy_from_slice(&self.plain[self.plain_off..len]);
-        self.plain_off += len;
-        Ok(len)
+        Ok(n)
     }
 }
 
 pub struct BoxStreamWrite<W> {
     stream: W,
-    key_nonce: KeyNonce,
-    // buf: Vec<u8>,
-    // buf_cap: usize,
-    enc: Vec<u8>,
-    // enc_pos: usize,
-    // enc_cap: usize,
+    bs_send: BoxStreamSend,
 }
 
 impl<W: Write> Write for BoxStreamWrite<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        // Encrypt into as many messages as we can fit in the self.send.enc buffer
-        let mut buf_n = 0;
-        let mut enc_n = 0;
-        while buf_n < buf.len() && enc_n + MSG_HEADER_LEN + MSG_BODY_MAX_LEN < self.enc.len() {
-            let n =
-                encrypt_box_stream_msg(&mut self.key_nonce, &buf[buf_n..], &mut self.enc[enc_n..]);
-            buf_n += n;
-            enc_n += n + MSG_HEADER_LEN;
-            debug!("Encrypted {} bytes", n);
-        }
-        // Write all the encrypted messages to the stream
-        self.stream.write_all(&self.enc[..enc_n])?;
-        Ok(buf_n)
+        let mut enc = [0; MSG_HEADER_LEN + MSG_BODY_MAX_LEN];
+        let (n, m) = self.bs_send.encrypt(buf, &mut enc);
+        self.stream.write_all(&enc[..m])?;
+        Ok(n)
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -570,7 +447,6 @@ mod tests {
             let bs_a = BoxStream::new(
                 stream_a_read,
                 stream_a_write,
-                0x8000,
                 peer_a.key_nonce_send,
                 peer_a.key_nonce_recv,
             );
@@ -579,7 +455,6 @@ mod tests {
             let bs_b = BoxStream::new(
                 stream_b_read,
                 stream_b_write,
-                0x8000,
                 peer_b.key_nonce_send,
                 peer_b.key_nonce_recv,
             );
