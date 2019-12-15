@@ -1,18 +1,15 @@
 extern crate base64;
 extern crate code;
-extern crate crossbeam;
 
 use std::env;
 use std::io::{self};
 use std::net::{TcpListener, TcpStream};
 
-use crossbeam::thread;
-use log::debug;
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
-use code::boxstream::{BoxStream, KeyNonce};
-use code::handshake::SharedSecret;
-use code::handshake_sync::{self, handshake_client, handshake_server};
+use code::boxstream::KeyNonce;
+use code::boxstream_sync::BoxStream;
+use code::handshake_sync::{handshake_client, handshake_server};
 
 const BUF_SIZE: usize = 0x8000;
 
@@ -55,7 +52,7 @@ fn main() {
         }
         "server" => {
             let listener = TcpListener::bind(addr).unwrap();
-            let (socket, addr) = listener.accept().unwrap();
+            let (socket, _) = listener.accept().unwrap();
 
             let handshake = handshake_server(&socket, net_id, server_pk, server_sk).unwrap();
             (handshake, socket)

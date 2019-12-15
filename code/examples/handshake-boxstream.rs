@@ -10,7 +10,8 @@ use crossbeam::thread;
 use log::debug;
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
-use code::boxstream::{BoxStream, KeyNonce};
+use code::boxstream::KeyNonce;
+use code::boxstream_sync::BoxStream;
 use code::handshake::SharedSecret;
 use code::handshake_sync::{self, handshake_client, handshake_server};
 

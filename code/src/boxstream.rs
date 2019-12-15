@@ -3,8 +3,9 @@ extern crate sodiumoxide;
 
 use crate::handshake::HandshakeComplete;
 
+use core::fmt;
+use core::{cmp, mem};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
-use std::{cmp, io, io::Read, io::Write, mem};
 
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
@@ -13,12 +14,34 @@ pub const MSG_HEADER_DEC_LEN: usize = 18;
 // Length of encrypted header (with MAC prefixed)
 pub const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
 
+#[derive(Debug)]
+pub enum Error {
+    DecryptHeaderSecretbox,
+    DecryptBodySecretbox,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::DecryptHeaderSecretbox => {
+                write!(f, "secretbox::open failed in header decryption")
+            }
+            Error::DecryptBodySecretbox => write!(f, "secretbox::open failed in body decryption"),
+        }
+    }
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
 pub struct KeyNonce {
     key: secretbox::Key,
     nonce: secretbox::Nonce,
 }
 
 impl KeyNonce {
+    pub fn new(key: secretbox::Key, nonce: secretbox::Nonce) -> Self {
+        Self { key, nonce }
+    }
     // Return (key_nonce_send, key_nonce_recv)
     pub fn from_handshake(handshake_complete: HandshakeComplete) -> (Self, Self) {
         let HandshakeComplete {
@@ -127,6 +150,9 @@ pub struct BoxStreamSend {
 }
 
 impl BoxStreamSend {
+    pub fn new(key_nonce: KeyNonce) -> Self {
+        Self { key_nonce }
+    }
     // Encrypt a single boxstream message by taking bytes from `buf` and encrypting them into
     // `enc`.  Returns the number of bytes read from `buf` and the number of bytes written to
     // `enc`.
@@ -136,7 +162,7 @@ impl BoxStreamSend {
     }
 }
 
-fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> io::Result<Header> {
+fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> Result<Header> {
     let (header_tag_buf, mut header_body_buf) =
         buf[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
     match secretbox::open_detached(
@@ -150,10 +176,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> io::Re
             Ok(Header::from_slice(&header_body_buf).unwrap())
         }
         Err(()) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "secretbox::open for header failed",
-            ));
+            return Err(Error::DecryptHeaderSecretbox);
         }
     }
 }
@@ -162,13 +185,7 @@ fn decrypt_box_stream_body(
     header: &Header,
     key_nonce: &mut KeyNonce,
     buf: &mut [u8],
-) -> io::Result<usize> {
-    if buf.len() < header.body_len {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "not enough bytes to read the body",
-        ));
-    }
+) -> Result<usize> {
     let mut body_buf = &mut buf[..header.body_len];
     match secretbox::open_detached(
         &mut body_buf,
@@ -181,12 +198,15 @@ fn decrypt_box_stream_body(
             Ok(header.body_len)
         }
         Err(()) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "secretbox::open for body failed",
-            ));
+            return Err(Error::DecryptBodySecretbox);
         }
     }
+}
+
+#[derive(Debug)]
+enum RecvState {
+    ExpectHeader,
+    ExpectBody(Header),
 }
 
 // Transport API agnostic boxstream receiving side.
@@ -196,10 +216,16 @@ pub struct BoxStreamRecv {
 }
 
 impl BoxStreamRecv {
+    pub fn new(key_nonce: KeyNonce) -> Self {
+        Self {
+            key_nonce,
+            state: RecvState::ExpectHeader,
+        }
+    }
     // Decrypt a single boxstream message every two calls (one to decrypt and parse the header, the
     // other do decrypt the body) by decrypting from `buf` and writting the plaintex to `dec`.
     // Returns the number of bytes read from `bud` and the number of bytes written to `dec`.
-    pub fn decrypt(&mut self, buf: &[u8], dec: &mut [u8]) -> io::Result<(usize, usize)> {
+    pub fn decrypt(&mut self, buf: &[u8], dec: &mut [u8]) -> Result<(usize, usize)> {
         let n = self.recv_bytes();
         if buf.len() < n {
             return Ok((0, 0));
@@ -230,83 +256,6 @@ impl BoxStreamRecv {
             RecvState::ExpectHeader => MSG_HEADER_LEN,
             RecvState::ExpectBody(header) => header.body_len,
         }
-    }
-}
-
-pub struct BoxStream<R: Read, W: Write> {
-    reader: BoxStreamRead<R>,
-    writer: BoxStreamWrite<W>,
-}
-
-impl<R: Read, W: Write> BoxStream<R, W> {
-    pub fn split_read_write(self) -> (BoxStreamRead<R>, BoxStreamWrite<W>) {
-        let BoxStream { reader, writer } = self;
-        (reader, writer)
-    }
-
-    pub fn new(
-        read_stream: R,
-        write_stream: W,
-        key_nonce_send: KeyNonce,
-        key_nonce_recv: KeyNonce,
-    ) -> Self {
-        let reader = BoxStreamRead {
-            stream: read_stream,
-            bs_recv: BoxStreamRecv {
-                key_nonce: key_nonce_recv,
-                state: RecvState::ExpectHeader,
-            },
-        };
-        let writer = BoxStreamWrite {
-            stream: write_stream,
-            bs_send: BoxStreamSend {
-                key_nonce: key_nonce_send,
-            },
-        };
-        Self { reader, writer }
-    }
-}
-
-#[derive(Debug)]
-enum RecvState {
-    ExpectHeader,
-    ExpectBody(Header),
-}
-
-pub struct BoxStreamRead<R> {
-    stream: R,
-    bs_recv: BoxStreamRecv,
-}
-
-impl<R: Read> Read for BoxStreamRead<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut enc = [0; MSG_HEADER_LEN + MSG_BODY_MAX_LEN];
-        let mut n = 0;
-        for _ in 0..2 {
-            let recv_bytes = self.bs_recv.recv_bytes();
-            self.stream.read_exact(&mut enc[..recv_bytes])?;
-            let (_, m) = self.bs_recv.decrypt(&enc[..recv_bytes], buf)?;
-            n += m;
-        }
-        Ok(n)
-    }
-}
-
-pub struct BoxStreamWrite<W> {
-    stream: W,
-    bs_send: BoxStreamSend,
-}
-
-impl<W: Write> Write for BoxStreamWrite<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut enc = [0; MSG_HEADER_LEN + MSG_BODY_MAX_LEN];
-        let (n, m) = self.bs_send.encrypt(buf, &mut enc);
-        self.stream.write_all(&enc[..m])?;
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.stream.flush()
     }
 }
 
@@ -407,77 +356,5 @@ mod tests {
             // Assert that the decrypted message is the message that was encrypted
             assert_eq!(&dec_msg_a[..], &msg_a[..]);
         }
-    }
-
-    use std::io::{Read, Write};
-
-    use test_utils::{net, net_fragment};
-
-    use crossbeam::thread;
-
-    #[test]
-    fn test_boxstream_sync() {
-        net(|a_rd, a_wr, b_rd, b_wr| boxstream_aux(a_rd, a_wr, b_rd, b_wr));
-    }
-
-    #[test]
-    fn test_boxstream_sync_fragment() {
-        net_fragment(5, |a_rd, a_wr, b_rd, b_wr| {
-            boxstream_aux(a_rd, a_wr, b_rd, b_wr)
-        });
-    }
-
-    // Send two small messages from peer a to peer b in a boxstream
-    fn boxstream_aux<R: Read + Send, W: Write + Send>(
-        stream_a_read: R,
-        stream_a_write: W,
-        stream_b_read: R,
-        stream_b_write: W,
-    ) {
-        let (peer_a, peer_b) = load_peers();
-
-        let msg_a0: Vec<u8> = (0..=255).collect();
-        let msg_a1: Vec<u8> = (0..5000).map(|b| (b % 99) as u8).collect();
-        let msg_a2: Vec<u8> = (0..=255).rev().collect();
-        let msg_a0_cpy = msg_a0.clone();
-        let msg_a1_cpy = msg_a1.clone();
-        let msg_a2_cpy = msg_a2.clone();
-
-        thread::scope(|s| {
-            let bs_a = BoxStream::new(
-                stream_a_read,
-                stream_a_write,
-                peer_a.key_nonce_send,
-                peer_a.key_nonce_recv,
-            );
-            let (mut bs_a_read, _) = bs_a.split_read_write();
-
-            let bs_b = BoxStream::new(
-                stream_b_read,
-                stream_b_write,
-                peer_b.key_nonce_send,
-                peer_b.key_nonce_recv,
-            );
-            let (_, mut bs_b_write) = bs_b.split_read_write();
-
-            let handle_a = s.spawn(move |_| {
-                for msg in &[msg_a0_cpy, msg_a1_cpy, msg_a2_cpy] {
-                    let mut buf = vec![0; msg.len()];
-                    bs_a_read.read_exact(&mut buf).unwrap();
-                    assert_eq!(&buf[..], &msg[..]);
-                }
-            });
-
-            let handle_b = s.spawn(move |_| {
-                for msg in &[msg_a0, msg_a1, msg_a2] {
-                    bs_b_write.write_all(&msg).unwrap();
-                    bs_b_write.flush().unwrap();
-                }
-            });
-
-            handle_a.join().unwrap();
-            handle_b.join().unwrap();
-        })
-        .unwrap();
     }
 }

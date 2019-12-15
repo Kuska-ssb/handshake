@@ -3,7 +3,6 @@ extern crate code;
 
 use sodiumoxide::crypto::{auth, sign::ed25519};
 use std::env;
-use std::io;
 use std::net::{TcpListener, TcpStream};
 
 use code::handshake::SharedSecret;
