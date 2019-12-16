@@ -5,6 +5,7 @@ mod feed;
 mod message;
 mod encoding;
 mod privatebox;
+mod pubs;
 
 pub use api::{
     parse_feed, parse_latest, parse_message, parse_whoami, ApiClient, CreateHistoryStreamArgs,
