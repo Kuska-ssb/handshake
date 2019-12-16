@@ -1,9 +1,35 @@
 extern crate sodiumoxide;
 
-use super::boxstream::BoxStream;
-
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
-use std::{io, io::Read, io::Result, io::Write};
+
+#[derive(Debug)]
+pub enum ScalarMultSk {
+    Ephemeral,
+    LongTerm,
+}
+
+#[derive(Debug)]
+pub enum ScalarMultPk {
+    ClientEphemeral,
+    ClientLongTerm,
+    ServerEphemeral,
+    ServerLongTerm,
+}
+
+#[derive(Debug)]
+pub enum Error {
+    RecvServerHelloAuth,
+    RecvServerAcceptSecretbox,
+    RecvServerAcceptEd25519,
+    RecvClientHelloAuth,
+    RecvClientAuthSecretbox,
+    RecvClientAuthEd25519,
+    SendClientAuthScalarmult(ScalarMultSk, ScalarMultPk),
+    RecvClientHelloScalarmult(ScalarMultSk, ScalarMultPk),
+    RecvClientAuthScalarmult(ScalarMultSk, ScalarMultPk),
+}
+
+pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
 #[allow(non_snake_case)]
@@ -12,7 +38,7 @@ pub struct SharedSecretPartial {
     aB: curve25519::GroupElement,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct SharedSecret {
     pub ab: curve25519::GroupElement,
@@ -21,9 +47,7 @@ pub struct SharedSecret {
 }
 
 #[derive(Debug)]
-pub struct HandshakeBase<R, W> {
-    read_stream: R,
-    write_stream: W,
+pub struct HandshakeBase {
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
@@ -32,8 +56,8 @@ pub struct HandshakeBase<R, W> {
 }
 
 #[derive(Debug)]
-pub struct Handshake<R, W, S: State> {
-    pub base: HandshakeBase<R, W>,
+pub struct Handshake<S: State> {
+    pub base: HandshakeBase,
     pub state: S,
 }
 
@@ -103,33 +127,18 @@ impl State for SendServerAccept {}
 
 impl State for Complete {}
 
-fn error_new(msg: &str) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, msg)
-}
-
-fn scalarmult_error_new(fn_name: &str, a: &str, b: &str) -> io::Error {
-    error_new(&format!(
-        "curve25519::scalarmult({}, {}) failed in {}",
-        a, b, fn_name
-    ))
-}
-
 // Client
-impl<R, W> Handshake<R, W, SendClientHello> {
+impl Handshake<SendClientHello> {
     pub fn new_client(
-        read_stream: R,
-        write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> Handshake<R, W, SendClientHello> {
+    ) -> Handshake<SendClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
         let state = SendClientHello;
         let base = HandshakeBase {
-            read_stream,
-            write_stream,
             net_id,
             pk,
             sk,
@@ -140,35 +149,36 @@ impl<R, W> Handshake<R, W, SendClientHello> {
     }
 }
 
-impl<R, W: Write> Handshake<R, W, SendClientHello> {
-    pub fn send_client_hello(mut self) -> Result<Handshake<R, W, RecvServerHello>> {
-        let send = [
+pub const CLIENT_HELLO_BYTES: usize = 64;
+
+impl Handshake<SendClientHello> {
+    pub fn send_client_hello(self, send_buf: &mut [u8]) -> Handshake<RecvServerHello> {
+        concat_into!(
+            send_buf,
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
-            self.base.ephemeral_pk.as_ref(),
-        ]
-        .concat();
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
+            self.base.ephemeral_pk.as_ref()
+        );
         let state = RecvServerHello;
-        Ok(Handshake {
+        Handshake {
             base: self.base,
             state,
-        })
+        }
+    }
+    pub const fn send_bytes(&self) -> usize {
+        CLIENT_HELLO_BYTES
     }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvServerHello> {
-    pub fn recv_server_hello(mut self) -> Result<Handshake<R, W, SendClientAuth>> {
-        let mut recv = [0; 64];
-        self.base.read_stream.read_exact(&mut recv)?;
-        let server_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
-        let server_ephemeral_pk = curve25519::GroupElement::from_slice(&recv[32..]).unwrap();
+impl Handshake<RecvServerHello> {
+    pub fn recv_server_hello(self, recv_buf: &[u8]) -> Result<Handshake<SendClientAuth>> {
+        let server_hmac = auth::Tag::from_slice(&recv_buf[..32]).unwrap();
+        let server_ephemeral_pk = curve25519::GroupElement::from_slice(&recv_buf[32..]).unwrap();
         if !auth::verify(
             &server_hmac,
             server_ephemeral_pk.as_ref(),
             &self.base.net_id,
         ) {
-            return Err(error_new("auth::verify failed in recv_server_hello"));
+            return Err(Error::RecvServerHelloAuth);
         }
         Ok(Handshake {
             base: self.base,
@@ -177,51 +187,68 @@ impl<R: Read, W> Handshake<R, W, RecvServerHello> {
             },
         })
     }
+    pub const fn recv_bytes(&self) -> usize {
+        SERVER_HELLO_BYTES
+    }
 }
 
-impl<R, W: Write> Handshake<R, W, SendClientAuth> {
+pub const CLIENT_AUTH_BYTES: usize = 112;
+
+impl Handshake<SendClientAuth> {
     pub fn send_client_auth(
-        mut self,
+        self,
+        send_buf: &mut [u8],
         server_pk: ed25519::PublicKey,
-    ) -> Result<Handshake<R, W, RecvServerAccept>> {
-        let fn_error = |a, b| Err(scalarmult_error_new("send_client_auth", a, b));
+    ) -> Result<Handshake<RecvServerAccept>> {
+        let fn_error = |a, b| Err(Error::SendClientAuthScalarmult(a, b));
         let shared_secret = SharedSecret {
             ab: curve25519::scalarmult(&self.base.ephemeral_sk, &self.state.server_ephemeral_pk)
-                .or(fn_error("ephemeral_sk", "server_ephemeral_pk"))?,
-            aB: curve25519::scalarmult(&self.base.ephemeral_sk, &server_pk.to_curve25519())
-                .or(fn_error("ephemeral_sk", "server_pk"))?,
+                .or(fn_error(
+                    ScalarMultSk::Ephemeral,
+                    ScalarMultPk::ServerEphemeral,
+                ))?,
+            aB: curve25519::scalarmult(&self.base.ephemeral_sk, &server_pk.to_curve25519()).or(
+                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ServerLongTerm),
+            )?,
             Ab: curve25519::scalarmult(
                 &self.base.sk.to_curve25519(),
                 &self.state.server_ephemeral_pk,
             )
-            .or(fn_error("sk", "server_ephemeral_pk"))?,
+            .or(fn_error(
+                ScalarMultSk::LongTerm,
+                ScalarMultPk::ServerEphemeral,
+            ))?,
         };
+
         let sig = ed25519::sign_detached(
-            &[
+            &concat!(
+                auth::KEYBYTES + ed25519::PUBLICKEYBYTES + sha256::DIGESTBYTES,
                 self.base.net_id.as_ref(),
                 server_pk.as_ref(),
-                sha256::hash(shared_secret.ab.as_ref()).as_ref(),
-            ]
-            .concat(),
+                sha256::hash(shared_secret.ab.as_ref()).as_ref()
+            ),
             &self.base.sk,
         );
-        let send = secretbox::seal(
-            &[sig.as_ref(), self.base.pk.as_ref()].concat(),
+
+        let tag = secretbox::seal_detached(
+            concat_into!(
+                &mut send_buf[secretbox::MACBYTES..],
+                sig.as_ref(),
+                self.base.pk.as_ref()
+            ),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
-                sha256::hash(
-                    &[
-                        self.base.net_id.as_ref(),
-                        shared_secret.ab.as_ref(),
-                        shared_secret.aB.as_ref(),
-                    ]
-                    .concat(),
-                )
+                sha256::hash(&concat!(
+                    auth::KEYBYTES + curve25519::GROUPELEMENTBYTES * 2,
+                    self.base.net_id.as_ref(),
+                    shared_secret.ab.as_ref(),
+                    shared_secret.aB.as_ref()
+                ))
                 .0,
             ),
         );
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
+        send_buf[..secretbox::MACBYTES].copy_from_slice(tag.as_ref());
+
         Ok(Handshake {
             base: self.base,
             state: RecvServerAccept {
@@ -232,14 +259,17 @@ impl<R, W: Write> Handshake<R, W, SendClientAuth> {
             },
         })
     }
+    pub const fn send_bytes(&self) -> usize {
+        CLIENT_AUTH_BYTES
+    }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
-    pub fn recv_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
-        let mut recv_enc = [0; 80];
-        self.base.read_stream.read_exact(&mut recv_enc)?;
-        let recv = secretbox::open(
-            &recv_enc,
+impl Handshake<RecvServerAccept> {
+    pub fn recv_server_accept(self, recv_buf: &mut [u8]) -> Result<Handshake<Complete>> {
+        let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
+        secretbox::open_detached(
+            &mut enc_buf,
+            &secretbox::Tag::from_slice(&tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
@@ -254,10 +284,9 @@ impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
                 .0,
             ),
         )
-        .or(Err(error_new(
-            "secretbox::open failed in recv_server_accept",
-        )))?;
-        let sig = ed25519::Signature::from_slice(&recv[..64]).unwrap();
+        .or(Err(Error::RecvServerAcceptSecretbox))?;
+        let dec_buf = enc_buf;
+        let sig = ed25519::Signature::from_slice(&dec_buf).unwrap();
         if !ed25519::verify_detached(
             &sig,
             &[
@@ -269,9 +298,7 @@ impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
             .concat(),
             &self.state.server_pk,
         ) {
-            return Err(error_new(
-                "ed25519::verify_detached failed in recv_server_accept",
-            ));
+            return Err(Error::RecvServerAcceptEd25519);
         }
         Ok(Handshake {
             base: self.base,
@@ -282,24 +309,23 @@ impl<R: Read, W> Handshake<R, W, RecvServerAccept> {
             },
         })
     }
+    pub const fn recv_bytes(&self) -> usize {
+        SERVER_ACCEPT_BYTES
+    }
 }
 
 // Server
-impl<R, W> Handshake<R, W, RecvClientHello> {
+impl Handshake<RecvClientHello> {
     pub fn new_server(
-        read_stream: R,
-        write_stream: W,
         net_id: auth::Key,
         pk: ed25519::PublicKey,
         sk: ed25519::SecretKey,
-    ) -> Handshake<R, W, RecvClientHello> {
+    ) -> Handshake<RecvClientHello> {
         let (ephemeral_ed_pk, ephemeral_ed_sk) = ed25519::gen_keypair();
         let ephemeral_pk = ephemeral_ed_pk.to_curve25519();
         let ephemeral_sk = ephemeral_ed_sk.to_curve25519();
         Handshake {
             base: HandshakeBase {
-                read_stream,
-                write_stream,
                 net_id,
                 pk,
                 sk,
@@ -311,25 +337,25 @@ impl<R, W> Handshake<R, W, RecvClientHello> {
     }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvClientHello> {
-    pub fn recv_client_hello(mut self) -> Result<Handshake<R, W, SendServerHello>> {
-        let mut recv = [0; 64];
-        self.base.read_stream.read_exact(&mut recv)?;
-        let client_hmac = auth::Tag::from_slice(&recv[..32]).unwrap();
-        let client_ephemeral_pk = curve25519::GroupElement::from_slice(&recv[32..]).unwrap();
+impl Handshake<RecvClientHello> {
+    pub fn recv_client_hello(self, recv_buf: &[u8]) -> Result<Handshake<SendServerHello>> {
+        let client_hmac = auth::Tag::from_slice(&recv_buf[..32]).unwrap();
+        let client_ephemeral_pk = curve25519::GroupElement::from_slice(&recv_buf[32..]).unwrap();
         if !auth::verify(
             &client_hmac,
             client_ephemeral_pk.as_ref(),
             &self.base.net_id,
         ) {
-            return Err(error_new("auth::verify failed in recv_client_hello"));
+            return Err(Error::RecvClientHelloAuth);
         }
-        let fn_error = |a, b| Err(scalarmult_error_new("recv_client_hello", a, b));
+        let fn_error = |a, b| Err(Error::RecvClientHelloScalarmult(a, b));
         let shared_secret_partial = SharedSecretPartial {
-            ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_ephemeral_pk)
-                .or(fn_error("ephemeral_sk", "client_ephemeral_pk"))?,
-            aB: curve25519::scalarmult(&self.base.sk.to_curve25519(), &client_ephemeral_pk)
-                .or(fn_error("sk", "client_ephemeral_pk"))?,
+            ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_ephemeral_pk).or(
+                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientEphemeral),
+            )?,
+            aB: curve25519::scalarmult(&self.base.sk.to_curve25519(), &client_ephemeral_pk).or(
+                fn_error(ScalarMultSk::LongTerm, ScalarMultPk::ClientEphemeral),
+            )?,
         };
         Ok(Handshake {
             base: self.base,
@@ -339,33 +365,39 @@ impl<R: Read, W> Handshake<R, W, RecvClientHello> {
             },
         })
     }
+    pub const fn recv_bytes(&self) -> usize {
+        CLIENT_HELLO_BYTES
+    }
 }
 
-impl<R, W: Write> Handshake<R, W, SendServerHello> {
-    pub fn send_server_hello(mut self) -> Result<Handshake<R, W, RecvClientAuth>> {
-        let send = [
+pub const SERVER_HELLO_BYTES: usize = 64;
+
+impl Handshake<SendServerHello> {
+    pub fn send_server_hello(self, send_buf: &mut [u8]) -> Handshake<RecvClientAuth> {
+        concat_into!(
+            send_buf,
             auth::authenticate(self.base.ephemeral_pk.as_ref(), &self.base.net_id).as_ref(),
-            self.base.ephemeral_pk.as_ref(),
-        ]
-        .concat();
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
-        Ok(Handshake {
+            self.base.ephemeral_pk.as_ref()
+        );
+        Handshake {
             base: self.base,
             state: RecvClientAuth {
                 client_ephemeral_pk: self.state.client_ephemeral_pk,
                 shared_secret_partial: self.state.shared_secret_partial,
             },
-        })
+        }
+    }
+    pub const fn send_bytes(&self) -> usize {
+        SERVER_HELLO_BYTES
     }
 }
 
-impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
-    pub fn recv_client_auth(mut self) -> Result<Handshake<R, W, SendServerAccept>> {
-        let mut recv_enc = [0; 112];
-        self.base.read_stream.read_exact(&mut recv_enc)?;
-        let recv = secretbox::open(
-            &recv_enc,
+impl Handshake<RecvClientAuth> {
+    pub fn recv_client_auth(self, recv_buf: &mut [u8]) -> Result<Handshake<SendServerAccept>> {
+        let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
+        secretbox::open_detached(
+            &mut enc_buf,
+            &secretbox::Tag::from_slice(&tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
@@ -379,9 +411,10 @@ impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
                 .0,
             ),
         )
-        .or(Err(error_new("secretbox::open failed in recv_client_auth")))?;
-        let client_sig = ed25519::Signature::from_slice(&recv[..64]).unwrap();
-        let client_pk = ed25519::PublicKey::from_slice(&recv[64..]).unwrap();
+        .or(Err(Error::RecvClientAuthSecretbox))?;
+        let dec_buf = enc_buf;
+        let client_sig = ed25519::Signature::from_slice(&dec_buf[..64]).unwrap();
+        let client_pk = ed25519::PublicKey::from_slice(&dec_buf[64..]).unwrap();
         if !ed25519::verify_detached(
             &client_sig,
             &[
@@ -392,16 +425,15 @@ impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
             .concat(),
             &client_pk,
         ) {
-            return Err(error_new(
-                "ed25519::verify_detached failed in recv_client_auth",
-            ));
+            return Err(Error::RecvClientAuthEd25519);
         }
-        let fn_error = |a, b| Err(scalarmult_error_new("recv_client_auth", a, b));
+        let fn_error = |a, b| Err(Error::RecvClientHelloScalarmult(a, b));
         let shared_secret = SharedSecret {
             ab: self.state.shared_secret_partial.ab,
             aB: self.state.shared_secret_partial.aB,
-            Ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_pk.to_curve25519())
-                .or(fn_error("ephemeral_sk", "client_pk"))?,
+            Ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_pk.to_curve25519()).or(
+                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientLongTerm),
+            )?,
         };
         Ok(Handshake {
             base: self.base,
@@ -413,61 +445,145 @@ impl<R: Read, W> Handshake<R, W, RecvClientAuth> {
             },
         })
     }
+    pub const fn recv_bytes(&self) -> usize {
+        CLIENT_AUTH_BYTES
+    }
 }
 
-impl<R, W: Write> Handshake<R, W, SendServerAccept> {
-    pub fn send_server_accept(mut self) -> Result<Handshake<R, W, Complete>> {
+pub const SERVER_ACCEPT_BYTES: usize = 80;
+
+impl Handshake<SendServerAccept> {
+    pub fn send_server_accept(self, send_buf: &mut [u8]) -> Handshake<Complete> {
         let sig = ed25519::sign_detached(
-            &[
+            &concat!(
+                auth::KEYBYTES
+                    + ed25519::SIGNATUREBYTES
+                    + ed25519::PUBLICKEYBYTES
+                    + sha256::DIGESTBYTES,
                 self.base.net_id.as_ref(),
                 self.state.client_sig.as_ref(),
                 self.state.client_pk.as_ref(),
-                sha256::hash(self.state.shared_secret.ab.as_ref()).as_ref(),
-            ]
-            .concat(),
+                sha256::hash(self.state.shared_secret.ab.as_ref()).as_ref()
+            ),
             &self.base.sk,
         );
-        let send = secretbox::seal(
-            sig.as_ref(),
+        send_buf[secretbox::MACBYTES..].copy_from_slice(sig.as_ref());
+        let tag = secretbox::seal_detached(
+            &mut send_buf[secretbox::MACBYTES..],
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
-                sha256::hash(
-                    &[
-                        self.base.net_id.as_ref(),
-                        self.state.shared_secret.ab.as_ref(),
-                        self.state.shared_secret.aB.as_ref(),
-                        self.state.shared_secret.Ab.as_ref(),
-                    ]
-                    .concat(),
-                )
+                sha256::hash(&concat!(
+                    auth::KEYBYTES + curve25519::GROUPELEMENTBYTES * 3,
+                    self.base.net_id.as_ref(),
+                    self.state.shared_secret.ab.as_ref(),
+                    self.state.shared_secret.aB.as_ref(),
+                    self.state.shared_secret.Ab.as_ref()
+                ))
                 .0,
             ),
         );
-        self.base.write_stream.write_all(&send)?;
-        self.base.write_stream.flush()?;
-        Ok(Handshake {
+        send_buf[..secretbox::MACBYTES].copy_from_slice(tag.as_ref());
+
+        Handshake {
             base: self.base,
             state: Complete {
                 peer_pk: self.state.client_pk,
                 peer_ephemeral_pk: self.state.client_ephemeral_pk,
                 shared_secret: self.state.shared_secret,
             },
-        })
+        }
+    }
+    pub const fn send_bytes(&self) -> usize {
+        SERVER_ACCEPT_BYTES
     }
 }
 
-impl<R:Read, W:Write> Handshake<R, W, Complete> {
-    pub fn to_box_stream(self, recv_buf_len: usize) -> BoxStream<R, W> {
-        BoxStream::new(
-            self.base.read_stream,
-            self.base.write_stream,
-            recv_buf_len,
-            self.base.net_id,
-            self.base.pk,
-            self.base.ephemeral_pk,
-            self.state.peer_pk,
-            self.state.peer_ephemeral_pk,
-            self.state.shared_secret,
-        )
+#[derive(Debug)]
+pub struct HandshakeComplete {
+    pub net_id: auth::Key,
+    pub pk: ed25519::PublicKey,
+    pub ephemeral_pk: curve25519::GroupElement,
+    pub peer_pk: ed25519::PublicKey,
+    pub peer_ephemeral_pk: curve25519::GroupElement,
+    pub shared_secret: SharedSecret,
+}
+
+impl Handshake<Complete> {
+    pub fn complete(&self) -> HandshakeComplete {
+        HandshakeComplete {
+            net_id: self.base.net_id.clone(),
+            pk: self.base.pk.clone(),
+            ephemeral_pk: self.base.ephemeral_pk.clone(),
+            peer_pk: self.state.peer_pk.clone(),
+            peer_ephemeral_pk: self.state.peer_ephemeral_pk.clone(),
+            shared_secret: self.state.shared_secret.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_handshake() {
+        let net_id_hex = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
+        let net_id = auth::Key::from_slice(&hex::decode(net_id_hex).unwrap()).unwrap();
+
+        let client_seed_hex = "0000000000000000000000000000000000000000000000000000000000000000";
+        let (client_pk, client_sk) = ed25519::keypair_from_seed(
+            &ed25519::Seed::from_slice(&hex::decode(client_seed_hex).unwrap()).unwrap(),
+        );
+
+        let server_seed_hex = "0000000000000000000000000000000000000000000000000000000000000001";
+        let (server_pk, server_sk) = ed25519::keypair_from_seed(
+            &ed25519::Seed::from_slice(&hex::decode(server_seed_hex).unwrap()).unwrap(),
+        );
+
+        let hs_client = Handshake::new_client(net_id.clone(), client_pk, client_sk);
+        let hs_server = Handshake::new_server(net_id, server_pk, server_sk);
+
+        let (hs_client, hs_server) = {
+            let mut client_buf = [0; CLIENT_HELLO_BYTES];
+            let hs_client = hs_client.send_client_hello(&mut client_buf);
+            let hs_server = hs_server.recv_client_hello(&mut client_buf).unwrap();
+            (hs_client, hs_server)
+        };
+        let (hs_client, hs_server) = {
+            let mut server_buf = [0; SERVER_HELLO_BYTES];
+            let hs_server = hs_server.send_server_hello(&mut server_buf);
+            let hs_client = hs_client.recv_server_hello(&mut server_buf).unwrap();
+            (hs_client, hs_server)
+        };
+        let (hs_client, hs_server) = {
+            let mut client_buf = [0; CLIENT_AUTH_BYTES];
+            let hs_client = hs_client
+                .send_client_auth(&mut client_buf, server_pk)
+                .unwrap();
+            let hs_server = hs_server.recv_client_auth(&mut client_buf).unwrap();
+            (hs_client, hs_server)
+        };
+        let (hs_client, hs_server) = {
+            let mut server_buf = [0; SERVER_ACCEPT_BYTES];
+            let hs_server = hs_server.send_server_accept(&mut server_buf);
+            let hs_client = hs_client.recv_server_accept(&mut server_buf).unwrap();
+            (hs_client, hs_server)
+        };
+
+        let complete_client = hs_client.complete();
+        let complete_server = hs_server.complete();
+
+        assert_eq!(complete_client.net_id, complete_server.net_id);
+        assert_eq!(complete_client.shared_secret, complete_server.shared_secret);
+        assert_eq!(complete_client.pk, complete_server.peer_pk);
+        assert_eq!(
+            complete_client.ephemeral_pk,
+            complete_server.peer_ephemeral_pk
+        );
+        assert_eq!(complete_client.peer_pk, complete_server.pk);
+        assert_eq!(
+            complete_client.peer_ephemeral_pk,
+            complete_server.ephemeral_pk
+        );
     }
 }

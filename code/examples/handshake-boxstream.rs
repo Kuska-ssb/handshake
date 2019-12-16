@@ -2,14 +2,18 @@ extern crate base64;
 extern crate code;
 extern crate crossbeam;
 
-use crossbeam::thread;
-use log::debug;
-use sodiumoxide::crypto::{auth, sign::ed25519};
 use std::env;
 use std::io::{self};
 use std::net::{TcpListener, TcpStream};
 
-use code::handshake::{Handshake, SharedSecret};
+use crossbeam::thread;
+use log::debug;
+use sodiumoxide::crypto::{auth, sign::ed25519};
+
+use code::boxstream::KeyNonce;
+use code::boxstream_sync::BoxStream;
+use code::handshake::SharedSecret;
+use code::handshake_sync::{self, handshake_client, handshake_server};
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -21,11 +25,11 @@ fn usage(arg0: &str) {
 }
 
 fn print_shared_secret(shared_secret: &SharedSecret) {
-    debug!("shared_secret {{");
-    debug!("  ab: {}", hex::encode(shared_secret.ab.as_ref()));
-    debug!("  aB: {}", hex::encode(shared_secret.aB.as_ref()));
-    debug!("  Ab: {}", hex::encode(shared_secret.Ab.as_ref()));
-    debug!("}}");
+    println!("shared_secret {{");
+    println!("  ab: {}", hex::encode(shared_secret.ab.as_ref()));
+    println!("  aB: {}", hex::encode(shared_secret.aB.as_ref()));
+    println!("  Ab: {}", hex::encode(shared_secret.Ab.as_ref()));
+    println!("}}");
 }
 
 fn test_server(
@@ -33,22 +37,19 @@ fn test_server(
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
-) -> io::Result<()> {
-    let handshake = Handshake::new_server(&socket, &socket, net_id, pk, sk)
-        .recv_client_hello()?
-        .send_server_hello()?
-        .recv_client_auth()?
-        .send_server_accept()?;
+) -> handshake_sync::Result<()> {
+    let handshake = handshake_server(&socket, net_id, pk, sk)?;
     println!("Handshake complete! 💃");
     debug!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    print_shared_secret(&handshake.shared_secret);
 
+    let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        handshake.to_box_stream(0x8000).split_read_write();
+        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
-        io::copy(&mut io::stdin(), &mut box_stream_write);
+        io::copy(&mut io::stdin(), &mut box_stream_write).unwrap();
         handle.join().unwrap();
     })
     .unwrap();
@@ -68,22 +69,19 @@ fn test_client(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
-) -> io::Result<()> {
-    let handshake = Handshake::new_client(&socket, &socket, net_id, pk, sk)
-        .send_client_hello()?
-        .recv_server_hello()?
-        .send_client_auth(server_pk)?
-        .recv_server_accept()?;
+) -> handshake_sync::Result<()> {
+    let handshake = handshake_client(&socket, net_id, pk, sk, server_pk)?;
     println!("Handshake complete! 💃");
     debug!("{:#?}", handshake);
-    print_shared_secret(&handshake.state.shared_secret);
+    print_shared_secret(&handshake.shared_secret);
 
+    let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        handshake.to_box_stream(0x8000).split_read_write();
+        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
 
     thread::scope(|s| {
         let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
-        io::copy(&mut io::stdin(), &mut box_stream_write);
+        io::copy(&mut io::stdin(), &mut box_stream_write).unwrap();
         handle.join().unwrap();
     })
     .unwrap();
@@ -97,12 +95,12 @@ fn test_client(
     Ok(())
 }
 
-fn main() -> io::Result<()> {
+fn main() {
     env_logger::init();
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         usage(&args[0]);
-        return Ok(());
+        return;
     }
     let net_id_hex = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
     let net_id = auth::Key::from_slice(&hex::decode(net_id_hex).unwrap()).unwrap();
@@ -115,27 +113,27 @@ fn main() -> io::Result<()> {
         "client" => {
             if args.len() < 4 {
                 usage(&args[0]);
-                return Ok(());
+                return;
             }
             let server_pk_buf = base64::decode_config(args[3].as_str(), base64::STANDARD).unwrap();
             let server_pk = ed25519::PublicKey::from_slice(&server_pk_buf).unwrap();
-            let socket = TcpStream::connect(args[2].as_str())?;
-            test_client(socket, net_id, pk, sk, server_pk)
+            let socket = TcpStream::connect(args[2].as_str()).unwrap();
+            test_client(socket, net_id, pk, sk, server_pk).unwrap();
         }
         "server" => {
             if args.len() < 3 {
                 usage(&args[0]);
-                return Ok(());
+                return;
             }
             let listener = TcpListener::bind(args[2].as_str()).unwrap();
             println!(
                 "Listening for a handshake via TCP at {} ...",
                 args[2].as_str()
             );
-            let (socket, addr) = listener.accept()?;
+            let (socket, addr) = listener.accept().unwrap();
             println!("Client {} connected", addr);
-            test_server(socket, net_id, pk, sk)
+            test_server(socket, net_id, pk, sk).unwrap();
         }
-        _ => Ok(()),
+        _ => {}
     }
 }
