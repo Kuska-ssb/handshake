@@ -89,7 +89,7 @@ mod tests {
 
     use std::io::{Read, Write};
 
-    use test_utils::{net, net_fragment};
+    use test_utils::net_sync::{net, net_fragment};
 
     use crossbeam::thread;
     use sodiumoxide::crypto::secretbox;
