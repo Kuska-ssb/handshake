@@ -87,11 +87,9 @@ pub async fn handshake_server<T: Read + Write + Unpin>(
 mod tests {
     use super::*;
 
-    use async_std::{io, io::Read, io::Write, prelude::*};
+    use async_std::{io::Read, io::Write};
 
-    use test_utils::net_async::{net};//, net_fragment};
-
-    use crossbeam::thread;
+    use test_utils::net_async::{net, net_fragment};
 
     const NET_ID_HEX: &str = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
     const CLIENT_SEED_HEX: &str =
@@ -135,42 +133,13 @@ mod tests {
         );
     }
 
-    // #[async_std::test]
-    // async fn test_handshake_async() {
-    //     // async fn op<T: Write + Read + Unpin + Send>(a: T, _: T, b: T, _: T) {
-    //     //     handshake_aux(a, b).await
-    //     // }
-
-    //     net(|a, _, b, _| { handshake_aux(a, b) }).await;
-    //     // net({
-    //     //     async fn op(a: &mut UnixStream, _: &mut UnixStream, b: &mut UnixStream, _: &mut UnixStream) {
-    //     //         handshake_aux(a, b).await
-    //     //     }
-    //     //     op
-    //     // }).await;
-    //     // net(op).await;
-    // }
-
-    use async_std::os::unix::net::UnixStream;
-    use async_std::net::Shutdown;
-
     #[async_std::test]
     async fn test_handshake_async() {
-        let (stream_a, stream_b) = std::os::unix::net::UnixStream::pair().unwrap();
-        let mut stream_a_read = UnixStream::from(stream_a.try_clone().unwrap());
-        // let mut stream_a_write = UnixStream::from(stream_a.try_clone().unwrap());
-        let mut stream_b_read = UnixStream::from(stream_b.try_clone().unwrap());
-        // let mut stream_b_write = UnixStream::from(stream_b.try_clone().unwrap());
-        handshake_aux(
-            &mut stream_a_read,
-            &mut stream_b_read,
-        ).await;
-        stream_a.shutdown(Shutdown::Both).unwrap();
-        stream_b.shutdown(Shutdown::Both).unwrap();
+        net(|a, _, b, _| { handshake_aux(a, b) }).await;
     }
 
-    // #[test]
-    // fn test_handshake_async_fragment() {
-    //     net_fragment(5, |a, _, b, _| handshake_aux(a, b));
-    // }
+    #[async_std::test]
+    async fn test_handshake_async_fragment() {
+        net_fragment(5, |a, _, b, _| handshake_aux(a, b)).await;
+    }
 }
