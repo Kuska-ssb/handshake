@@ -9,7 +9,9 @@ use async_std::io::{Read,Write};
 use async_std::net::TcpStream;
 
 use code::pasync::rpc::{Header,RequestNo,RpcClient};
-use code::pasync::handbox::Handshake;
+use code::pasync::util::to_ioerr;
+use code::pasync::handbox::handshake_client;
+use code::pasync::handbox::BoxStream;
 use code::pasync::patchwork::*;
 
 async fn get_async<'a,R,W,T,F> (client: &mut ApiClient<R,W>, req_no : RequestNo, f : F) -> io::Result<T>
@@ -52,7 +54,6 @@ where
 
 #[async_std::main]
 async fn main() -> io::Result<()> {
-
     env_logger::init();
     log::set_max_level(log::LevelFilter::max());
 
@@ -61,16 +62,14 @@ async fn main() -> io::Result<()> {
 
     let socket = TcpStream::connect("127.0.0.1:8008").await?;
 
-    let handshake = Handshake::new_client(&socket, &socket, ssb_net_id(), pk, sk.clone())
-        .send_client_hello().await?
-        .recv_server_hello().await?
-        .send_client_auth(pk).await?
-        .recv_server_accept().await?;
+    let handshake = handshake_client(&socket, ssb_net_id(), pk, sk.clone(), pk).await
+        .map_err(to_ioerr)?;
 
     println!("💃 handshake complete");
 
     let (box_stream_read, box_stream_write) =
-        handshake.to_box_stream(0x8000).split_read_write();
+        BoxStream::from_handhake(&socket, &socket, handshake, 0x8000)
+        .split_read_write();
 
     let mut client = ApiClient::new(RpcClient::new(box_stream_read, box_stream_write));
 
