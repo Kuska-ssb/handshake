@@ -120,6 +120,19 @@ impl Header {
     }
 }
 
+// Encrypt the final goodbye message.
+fn encrypt_box_stream_goodbye(key_nonce: &mut KeyNonce, enc: &mut [u8]) -> usize {
+    let header_nonce = key_nonce.nonce;
+
+    (secretbox::MACBYTES..secretbox::MACBYTES+MSG_HEADER_DEC_LEN).for_each(|x| enc[x]=0);
+    
+    let (goodbye_tag_buf, mut goodbye_header_buf) = enc[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
+    let goodbye_tag = secretbox::seal_detached(&mut goodbye_header_buf, &header_nonce, &key_nonce.key);
+    goodbye_tag_buf.copy_from_slice(goodbye_tag.as_ref());
+    return MSG_HEADER_LEN;
+}
+
+
 // Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
 fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) -> usize {
     let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
@@ -159,6 +172,9 @@ impl BoxStreamSend {
     pub fn encrypt(&mut self, buf: &[u8], mut enc: &mut [u8]) -> (usize, usize) {
         let n = encrypt_box_stream_msg(&mut self.key_nonce, buf, &mut enc);
         (n, n + MSG_HEADER_LEN)
+    }
+    pub fn encrypt_goodbye(&mut self, enc: &mut [u8]) -> usize {
+        encrypt_box_stream_goodbye(&mut self.key_nonce, &mut enc[..])
     }
 }
 
