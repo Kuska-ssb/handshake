@@ -1,7 +1,4 @@
-extern crate sodiumoxide;
-
 use std::convert;
-use crate::handshake::{self, Handshake, HandshakeComplete};
 use sodiumoxide::crypto::{auth, sign::ed25519};
 use async_std::{
     prelude::*,
@@ -9,6 +6,8 @@ use async_std::{
     io::Read,
     io::Write
 };
+
+use crate::handshake::{self, Handshake, HandshakeComplete};
 
 #[derive(Debug)]
 pub enum Error {
@@ -70,11 +69,11 @@ pub async fn handshake_server<T: Read + Write + Unpin>(
 
     let mut recv_buf = &mut buf[..handshake.recv_bytes()];
     stream.read_exact(&mut recv_buf).await?;
-    let handshake = handshake.recv_client_hello(&mut recv_buf)?;
+    let handshake = handshake.recv_client_hello(&recv_buf)?;
 
     let mut send_buf = &mut buf[..handshake.send_bytes()];
     let handshake = handshake.send_server_hello(&mut send_buf);
-    stream.write_all(&mut send_buf).await?;
+    stream.write_all(&send_buf).await?;
 
     let mut recv_buf = &mut buf[..handshake.recv_bytes()];
     stream.read_exact(&mut recv_buf).await?;
@@ -82,7 +81,7 @@ pub async fn handshake_server<T: Read + Write + Unpin>(
 
     let mut send_buf = &mut buf[..handshake.send_bytes()];
     let handshake = handshake.send_server_accept(&mut send_buf);
-    stream.write_all(&mut send_buf).await?;
+    stream.write_all(&send_buf).await?;
 
     Ok(handshake.complete())
 }
