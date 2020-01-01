@@ -1,5 +1,5 @@
 mod boxstream;
 mod handshake;
 
-pub use handshake::Handshake;
-pub use boxstream::{BoxStreamRead,BoxStreamWrite};
+pub use handshake::{handshake_client,handshake_server};
+pub use boxstream::{BoxStreamRead,BoxStreamWrite,BoxStream};

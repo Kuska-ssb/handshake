@@ -165,7 +165,7 @@ impl<R:io::Read+Unpin , W:io::Write+Unpin> RpcClient<R,W> {
     }
 
     pub async fn close(&mut self) -> Result<(),io::Error> {
-        self.box_writer.close().await
+        self.box_writer.goodbye().await
     }
 
 }
