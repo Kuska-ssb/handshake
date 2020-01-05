@@ -35,7 +35,7 @@ pub async fn handshake_client<T: Read + Write + Unpin>(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
-) -> Result<HandshakeComplete> {
+) -> Result<(T,HandshakeComplete)> {
     let mut buf = [0; 128];
     let handshake = Handshake::new_client(net_id, pk, sk);
 
@@ -55,7 +55,7 @@ pub async fn handshake_client<T: Read + Write + Unpin>(
     stream.read_exact(&mut recv_buf).await?;
     let handshake = handshake.recv_server_accept(&mut recv_buf)?;
 
-    Ok(handshake.complete())
+    Ok((stream,handshake.complete()))
 }
 
 pub async fn handshake_server<T: Read + Write + Unpin>(
