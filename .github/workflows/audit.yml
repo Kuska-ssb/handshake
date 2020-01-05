@@ -1,9 +1,6 @@
 name: Security audit
-on:
-  push:
-    paths: 
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
+on: [push]
+
 jobs:
   security_audit:
     runs-on: ubuntu-latest
