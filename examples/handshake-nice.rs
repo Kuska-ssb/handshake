@@ -1,19 +1,12 @@
 extern crate base64;
-extern crate code;
-extern crate crossbeam;
+extern crate kuska_handshake;
 
+use sodiumoxide::crypto::{auth, sign::ed25519};
 use std::env;
-use std::io::{self};
 use std::net::{TcpListener, TcpStream};
 
-use crossbeam::thread;
-use log::debug;
-use sodiumoxide::crypto::{auth, sign::ed25519};
-
-use code::boxstream::KeyNonce;
-use code::boxstream_sync::BoxStream;
-use code::handshake::SharedSecret;
-use code::handshake_sync::{self, handshake_client, handshake_server};
+use kuska_handshake::SharedSecret;
+use kuska_handshake::sync::{self, handshake_client, handshake_server};
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -37,29 +30,11 @@ fn test_server(
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
-) -> handshake_sync::Result<()> {
+) -> sync::Result<()> {
     let handshake = handshake_server(&socket, net_id, pk, sk)?;
     println!("Handshake complete! 💃");
-    debug!("{:#?}", handshake);
+    println!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);
-
-    let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
-    let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
-
-    thread::scope(|s| {
-        let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
-        io::copy(&mut io::stdin(), &mut box_stream_write).unwrap();
-        handle.join().unwrap();
-    })
-    .unwrap();
-    // box_stream.write(b"I'm the server")?;
-    // box_stream.flush()?;
-    // let mut buf = [0; 0x1000];
-    // let n = box_stream.read(&mut buf)?;
-    // println!("Received:");
-    // io::stdout().write_all(&buf[..n])?;
-    // println!();
     Ok(())
 }
 
@@ -69,34 +44,15 @@ fn test_client(
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
-) -> handshake_sync::Result<()> {
+) -> sync::Result<()> {
     let handshake = handshake_client(&socket, net_id, pk, sk, server_pk)?;
     println!("Handshake complete! 💃");
-    debug!("{:#?}", handshake);
+    println!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);
-
-    let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
-    let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
-
-    thread::scope(|s| {
-        let handle = s.spawn(move |_| io::copy(&mut box_stream_read, &mut io::stdout()).unwrap());
-        io::copy(&mut io::stdin(), &mut box_stream_write).unwrap();
-        handle.join().unwrap();
-    })
-    .unwrap();
-    // box_stream.write(b"I'm the client")?;
-    // box_stream.flush()?;
-    // let mut buf = [0; 0x1000];
-    // let n = box_stream.read(&mut buf)?;
-    // println!("Received:");
-    // io::stdout().write_all(&buf[..n])?;
-    // println!();
     Ok(())
 }
 
 fn main() {
-    env_logger::init();
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         usage(&args[0]);
