@@ -22,4 +22,4 @@ jobs:
       - uses: coverallsapp/github-action@v1.0.1
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          path-to-lcov: /home/user/build/lcov.info
+          path-to-lcov: /lcov.info
