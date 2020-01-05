@@ -6,16 +6,9 @@ use async_std::{
     io::Read,
     io::Write
 };
+use super::error::{Error,Result};
 
 use crate::handshake::{self, Handshake, HandshakeComplete};
-
-#[derive(Debug)]
-pub enum Error {
-    Handshake(handshake::Error),
-    Io(io::Error),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
 
 impl convert::From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
