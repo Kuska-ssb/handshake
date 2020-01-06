@@ -23,8 +23,8 @@ jobs:
         uses: actions-rs/grcov@v0.1
       - name: list all /tmp files
         run: ls -la /tmp
-      - name: show the coverage report
-        run: cat ${{ steps.coverage.outputs.report }}
+      - name: Copy generated report
+        run: cp ${{ steps.coverage.outputs.report }} ${{ github.workspace }}/lcov.info
       - name: Upload coverage report
         uses: codecov/codecov-action@v1.0.2
         with:
