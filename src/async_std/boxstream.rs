@@ -366,9 +366,10 @@ fn assert_not_closed(actual: &Status) -> Poll<Result<()>> {
     Poll::Ready(Ok(()))
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
-    use crate::pasync::util::CircularBuffer;
+    use super::super::circularbuffer::CircularBuffer;
     use sodiumoxide::crypto::{hash::sha256, secretbox};
 
     #[async_std::test]

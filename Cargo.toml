@@ -1,0 +1,49 @@
+[package]
+name = "kuska-handshake"
+version = "0.1.0"
+authors = ["Dhole <dhole@riseup.net>", "Adria Massanet <adria@codecontext.io>"]
+edition = "2018"
+
+[lib]
+name = "kuska_handshake"
+
+[dependencies]
+sodiumoxide = { git = "https://github.com/Dhole/sodiumoxidez", branch = "extra" }
+arrayref = "0.3.5"
+async-std = { version = "1.4.0", features=["unstable","attributes"] }
+futures = "0.3.1"
+log = "0.4.8"
+
+[dev-dependencies]
+test_utils = { path = "test_utils" }
+crossbeam = "0.7.3"
+rand = "0.7.2"
+serde = "1.0.104"
+serde_json = { version = "1.0.44", features=["preserve_order","arbitrary_precision"] }
+serde_derive = "1.0.104"
+dirs = "2.0"
+env_logger = "0.7.1"
+get_if_addrs = "0.5.3"
+base64 = "0.11.0"
+hex = "0.4.0"
+
+[features]
+default = []
+sync = []
+async_std = []
+
+[[example]]
+name = "async"
+required-features = ["async"]
+
+[[example]]
+name = "handshake-boxstream-bench"
+required-features = ["sync"]
+
+[[example]]
+name = "handshake-boxstream"
+required-features = ["sync"]
+
+[[example]]
+name = "handshake-nice"
+required-features = ["sync"]
