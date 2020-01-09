@@ -1,5 +1,6 @@
 mod boxstream;
 mod handshake;
+#[cfg(feature = "tokio_compat")]
 mod tokio_compat;
 
 #[cfg(test)]
