@@ -4,14 +4,7 @@ use std::{convert, io, io::Read, io::Write};
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
 use crate::handshake::{self, Handshake, HandshakeComplete};
-
-#[derive(Debug)]
-pub enum Error {
-    Handshake(handshake::Error),
-    Io(io::Error),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
+use super::error::{Error,Result};
 
 impl convert::From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
