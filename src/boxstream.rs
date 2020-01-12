@@ -128,7 +128,7 @@ fn encrypt_box_stream_goodbye(key_nonce: &mut KeyNonce, enc: &mut [u8]) -> usize
 
     let goodbye_tag = secretbox::seal_detached(&mut goodbye_header_buf, &key_nonce.nonce, &key_nonce.key);
     goodbye_tag_buf.copy_from_slice(goodbye_tag.as_ref());
-    return MSG_HEADER_LEN;
+    MSG_HEADER_LEN
 }
 
 // Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
@@ -152,7 +152,7 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) 
     header_body_buf.copy_from_slice(&header.to_bytes());
     let header_tag = secretbox::seal_detached(&mut header_body_buf, &header_nonce, &key_nonce.key);
     header_tag_buf.copy_from_slice(header_tag.as_ref());
-    return body.len();
+    body.len()
 }
 
 // Transport API agnostic boxstream sending side.
@@ -190,7 +190,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> Result
             Ok(Header::from_slice(&header_body_buf).unwrap())
         }
         Err(()) => {
-            return Err(Error::DecryptHeaderSecretbox);
+            Err(Error::DecryptHeaderSecretbox)
         }
     }
 }
@@ -212,7 +212,7 @@ fn decrypt_box_stream_body(
             Ok(header.body_len)
         }
         Err(()) => {
-            return Err(Error::DecryptBodySecretbox);
+            Err(Error::DecryptBodySecretbox)
         }
     }
 }
@@ -291,7 +291,7 @@ mod tests {
         let nonce0 = secretbox::Nonce::from_slice(&hex::decode(NONCE0_HEX).unwrap()).unwrap();
         let nonce1 = secretbox::Nonce::from_slice(&hex::decode(NONCE1_HEX).unwrap()).unwrap();
         let mut key_nonce = KeyNonce {
-            key: key,
+            key,
             nonce: nonce0,
         };
         key_nonce.increment_nonce_be_inplace();

@@ -29,11 +29,14 @@ pub struct Buffer<'a> {
 
 impl<'a> Buffer<'a> {
     pub fn new(buf: &'a mut [u8]) -> Self {
-        Buffer { buf: buf, n: 0 }
+        Buffer { buf, n: 0 }
     }
     pub fn append(&mut self, src: &[u8]) {
         self.buf[self.n..src.len()].copy_from_slice(src);
         self.n += src.len();
+    }
+    pub fn is_empty(&self) -> bool {
+        self.n == 0
     }
     pub fn len(&self) -> usize {
         self.n

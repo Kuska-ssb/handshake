@@ -203,18 +203,18 @@ impl Handshake<SendClientAuth> {
         let fn_error = |a, b| Err(Error::SendClientAuthScalarmult(a, b));
         let shared_secret = SharedSecret {
             ab: curve25519::scalarmult(&self.base.ephemeral_sk, &self.state.server_ephemeral_pk)
-                .or(fn_error(
+                .or_else(|_| fn_error(
                     ScalarMultSk::Ephemeral,
                     ScalarMultPk::ServerEphemeral,
                 ))?,
-            aB: curve25519::scalarmult(&self.base.ephemeral_sk, &server_pk.to_curve25519()).or(
-                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ServerLongTerm),
+            aB: curve25519::scalarmult(&self.base.ephemeral_sk, &server_pk.to_curve25519()).or_else(
+                |_| fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ServerLongTerm),
             )?,
             Ab: curve25519::scalarmult(
                 &self.base.sk.to_curve25519(),
                 &self.state.server_ephemeral_pk,
             )
-            .or(fn_error(
+            .or_else (|_| fn_error(
                 ScalarMultSk::LongTerm,
                 ScalarMultPk::ServerEphemeral,
             ))?,
@@ -252,9 +252,9 @@ impl Handshake<SendClientAuth> {
         Ok(Handshake {
             base: self.base,
             state: RecvServerAccept {
-                server_pk: server_pk,
+                server_pk,
                 server_ephemeral_pk: self.state.server_ephemeral_pk,
-                shared_secret: shared_secret,
+                shared_secret,
                 sig,
             },
         })
@@ -350,11 +350,11 @@ impl Handshake<RecvClientHello> {
         }
         let fn_error = |a, b| Err(Error::RecvClientHelloScalarmult(a, b));
         let shared_secret_partial = SharedSecretPartial {
-            ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_ephemeral_pk).or(
-                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientEphemeral),
+            ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_ephemeral_pk).or_else(
+                |_| fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientEphemeral),
             )?,
-            aB: curve25519::scalarmult(&self.base.sk.to_curve25519(), &client_ephemeral_pk).or(
-                fn_error(ScalarMultSk::LongTerm, ScalarMultPk::ClientEphemeral),
+            aB: curve25519::scalarmult(&self.base.sk.to_curve25519(), &client_ephemeral_pk).or_else(
+                |_| fn_error(ScalarMultSk::LongTerm, ScalarMultPk::ClientEphemeral),
             )?,
         };
         Ok(Handshake {
@@ -431,8 +431,8 @@ impl Handshake<RecvClientAuth> {
         let shared_secret = SharedSecret {
             ab: self.state.shared_secret_partial.ab,
             aB: self.state.shared_secret_partial.aB,
-            Ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_pk.to_curve25519()).or(
-                fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientLongTerm),
+            Ab: curve25519::scalarmult(&self.base.ephemeral_sk, &client_pk.to_curve25519()).or_else(
+                |_| fn_error(ScalarMultSk::Ephemeral, ScalarMultPk::ClientLongTerm),
             )?,
         };
         Ok(Handshake {
@@ -512,9 +512,9 @@ impl Handshake<Complete> {
     pub fn complete(&self) -> HandshakeComplete {
         HandshakeComplete {
             net_id: self.base.net_id.clone(),
-            pk: self.base.pk.clone(),
+            pk: self.base.pk,
             ephemeral_pk: self.base.ephemeral_pk.clone(),
-            peer_pk: self.state.peer_pk.clone(),
+            peer_pk: self.state.peer_pk,
             peer_ephemeral_pk: self.state.peer_ephemeral_pk.clone(),
             shared_secret: self.state.shared_secret.clone(),
         }
