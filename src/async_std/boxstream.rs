@@ -81,7 +81,7 @@ where
     pub fn new(stream: R, key_nonce: KeyNonce, capacity: usize) -> BoxStreamRead<R> {
         let bs = BoxStreamRecv::new(key_nonce);
         Self {
-            stream: stream,
+            stream,
             plain: vec![0; capacity].into_boxed_slice(),
             plain_len: 0,
             plain_off: 0,
@@ -202,7 +202,7 @@ where
 {
     pub fn new(stream: W, key_nonce: KeyNonce, capacity: usize) -> BoxStreamWrite<W> {
         Self {
-            stream: stream,
+            stream,
             status: Status::Open,
             bs_send: super::boxstream::BoxStreamSend::new(key_nonce),
             cipher: vec![0; capacity].into_boxed_slice(),
