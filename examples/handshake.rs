@@ -2,8 +2,6 @@ extern crate base64;
 extern crate hex;
 extern crate rand;
 extern crate sodiumoxide;
-#[macro_use]
-extern crate arrayref;
 
 use std::convert::TryInto;
 
@@ -18,7 +16,7 @@ fn main() {
 
     let net_id_hex = "d4a1cb88a66f02f8db635ce26441cc5dac1b08420ceaac230839b755845a9ffb";
     let net_id_slice = hex::decode(net_id_hex).unwrap();
-    let net_id = auth::Key(*array_ref![&net_id_slice, 0, 32]);
+    let net_id = auth::Key::from_slice(&net_id_slice[0..32]).unwrap();
 
     // Client
     let (client_pk, client_sk) = ed25519::gen_keypair();
@@ -53,9 +51,10 @@ fn main() {
     let server_client_ephemeral_pk = {
         assert!(client_msg.len() == 64);
         let client_hmac_buf = &client_msg[..32];
-        let client_hmac = auth::Tag(*array_ref![client_hmac_buf, 0, 32]);
+        let client_hmac = auth::Tag::from_slice(&client_hmac_buf.as_ref()[0..32]).unwrap();
         let client_ephemeral_pk_buf = &client_msg[32..];
-        let client_ephemeral_pk = ed25519::PublicKey(*array_ref![client_ephemeral_pk_buf, 0, 32]);
+        let client_ephemeral_pk =
+            ed25519::PublicKey::from_slice(&client_ephemeral_pk_buf.as_ref()[0..32]).unwrap();
         if !auth::verify(&client_hmac, client_ephemeral_pk_buf, &net_id) {
             panic!("1. hmac verification at server failed");
         }
@@ -80,9 +79,10 @@ fn main() {
     let client_server_ephemeral_pk = {
         assert!(server_msg.len() == 64);
         let server_hmac_buf = &server_msg[..32];
-        let server_hmac = auth::Tag(*array_ref![server_hmac_buf, 0, 32]);
+        let server_hmac = auth::Tag::from_slice(&server_hmac_buf.as_ref()[0..32]).unwrap();
         let server_ephemeral_pk_buf = &server_msg[32..];
-        let server_ephemeral_pk = ed25519::PublicKey(*array_ref![server_ephemeral_pk_buf, 0, 32]);
+        let server_ephemeral_pk =
+            ed25519::PublicKey::from_slice(&server_ephemeral_pk_buf.as_ref()[0..32]).unwrap();
         if !auth::verify(&server_hmac, server_ephemeral_pk_buf, &net_id) {
             panic!("2. hmac verification at server failed");
         }
@@ -160,8 +160,8 @@ fn main() {
         )
         .unwrap();
         assert!(msg.len() == 96);
-        let sig = ed25519::Signature(*array_ref![msg, 0, 64]);
-        let client_pk = ed25519::PublicKey(*array_ref![msg, 64, 32]);
+        let sig = ed25519::Signature::from_slice(&msg[0..64]).unwrap();
+        let client_pk = ed25519::PublicKey::from_slice(&msg[64..32]).unwrap();
         if !ed25519::verify_detached(
             &sig,
             &[
@@ -240,7 +240,7 @@ fn main() {
         )
         .unwrap();
         assert!(msg.len() == 64);
-        let sig = ed25519::Signature(*array_ref![msg, 0, 64]);
+        let sig = ed25519::Signature::from_slice(&msg[0..64]).unwrap();
         if !ed25519::verify_detached(
             &sig,
             &[

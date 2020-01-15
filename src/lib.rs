@@ -1,5 +1,3 @@
-#[macro_use]
-extern crate arrayref;
 extern crate log;
 
 #[macro_use]
