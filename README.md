@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/Kuska-ssb/kuska-handshake/branch/master/graph/badge.svg)](https://codecov.io/gh/Kuska-ssb/kuska-handshake)
+
 # ssb-study
 
 - FAQ
