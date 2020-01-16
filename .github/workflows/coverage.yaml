@@ -21,8 +21,6 @@ jobs:
       - name: Generate coverage report
         id: coverage
         uses: actions-rs/grcov@v0.1
-      - name: list all /tmp files
-        run: ls -la /tmp
       - name: Copy generated report
         run: cp ${{ steps.coverage.outputs.report }} ${{ github.workspace }}/lcov.info
       - name: Upload coverage report
