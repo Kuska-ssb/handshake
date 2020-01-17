@@ -65,7 +65,8 @@ impl KeyNonce {
             key: secretbox::Key(
                 sha256::hash(&[shared_secret_1.as_ref(), peer_pk.as_ref()].concat()).0,
             ),
-            nonce: secretbox::Nonce(*array_ref![send_hmac_nonce.as_ref(), 0, 24]),
+            nonce: secretbox::Nonce::from_slice(&send_hmac_nonce.as_ref()[..secretbox::NONCEBYTES])
+                .unwrap(),
         };
         let recv_hmac_nonce = auth::authenticate(ephemeral_pk.as_ref(), &net_id);
         let key_nonce_recv = KeyNonce {
@@ -123,10 +124,12 @@ impl Header {
 // Encrypt the final goodbye message.
 // note: nonce is not incremented since this *must* be the last nonce used
 fn encrypt_box_stream_goodbye(key_nonce: &mut KeyNonce, enc: &mut [u8]) -> usize {
-    let (goodbye_tag_buf, mut goodbye_header_buf) = enc[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
-    goodbye_header_buf.iter_mut().for_each(|x| *x=0);
+    let (goodbye_tag_buf, mut goodbye_header_buf) =
+        enc[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
+    goodbye_header_buf.iter_mut().for_each(|x| *x = 0);
 
-    let goodbye_tag = secretbox::seal_detached(&mut goodbye_header_buf, &key_nonce.nonce, &key_nonce.key);
+    let goodbye_tag =
+        secretbox::seal_detached(&mut goodbye_header_buf, &key_nonce.nonce, &key_nonce.key);
     goodbye_tag_buf.copy_from_slice(goodbye_tag.as_ref());
     MSG_HEADER_LEN
 }
