@@ -38,7 +38,7 @@ name = "async"
 required-features = ["async"]
 
 [[example]]
-name = "handshake-boxstream-bench"
+name = "handshake-boxstream-bench-sync"
 required-features = ["sync"]
 
 [[example]]
@@ -48,3 +48,8 @@ required-features = ["sync"]
 [[example]]
 name = "handshake-nice"
 required-features = ["sync"]
+
+[[example]]
+name = "handshake-boxstream-bench-async"
+required-features = ["async_std"]
+

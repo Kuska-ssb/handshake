@@ -2,11 +2,11 @@
 
 set -ex
 
-EXAMPLE="handshake-boxstream-bench-sync"
+EXAMPLE="handshake-boxstream-bench-async"
 ADDRESS="localhost:9999"
 COUNTGB="4"
 
-ARGS="--release --features sync --example ${EXAMPLE}"
+ARGS="--release --features sync --features async_std --example ${EXAMPLE}"
 
 cargo build $ARGS
 
