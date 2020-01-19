@@ -28,7 +28,7 @@ async_std = []
 tokio_compat = [ "async_std" ]
 
 [[example]]
-name = "handshake-boxstream-bench"
+name = "handshake-boxstream-bench-sync"
 required-features = ["sync"]
 
 [[example]]
@@ -38,3 +38,8 @@ required-features = ["sync"]
 [[example]]
 name = "handshake"
 required-features = ["sync"]
+
+[[example]]
+name = "handshake-boxstream-bench-async"
+required-features = ["async_std"]
+

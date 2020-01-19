@@ -2,22 +2,22 @@ extern crate base64;
 extern crate kuska_handshake;
 
 use std::env;
-use std::io::{self};
-use std::net::{TcpListener, TcpStream};
+use async_std::io::{self, Read,Write};
+use async_std::net::{TcpStream, TcpListener};
 
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
 use kuska_handshake::KeyNonce;
-use kuska_handshake::sync::BoxStream;
-use kuska_handshake::sync::{handshake_client, handshake_server};
+use kuska_handshake::async_std::{handshake_client, handshake_server, BoxStream, Error};
 
 const BUF_SIZE: usize = 0x8000;
 
-fn main() {
+#[async_std::main]
+async fn main() -> Result<(), Error> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 3 {
         eprintln!("Usage: {} [client/server] address [--buf]", args[0]);
-        return;
+        return Ok(());
     }
     let mode = args[1].as_str();
     let addr = args[2].as_str();
@@ -44,28 +44,27 @@ fn main() {
 
     let (handshake, socket) = match mode {
         "client" => {
-            let socket = TcpStream::connect(addr).unwrap();
+            let socket = TcpStream::connect(addr).await?;
 
-            let handshake =
-                handshake_client(&socket, net_id, client_pk, client_sk, server_pk).unwrap();
+            let (_,  handshake) =
+                handshake_client(&socket, net_id, client_pk, client_sk, server_pk).await?;
             (handshake, socket)
         }
         "server" => {
-            let listener = TcpListener::bind(addr).unwrap();
-            let (socket, _) = listener.accept().unwrap();
+            let listener = TcpListener::bind(addr).await?;
+            let (socket, _) = listener.accept().await?;
 
-            let handshake = handshake_server(&socket, net_id, server_pk, server_sk).unwrap();
+            let handshake = handshake_server(&socket, net_id, server_pk, server_sk).await?;
             (handshake, socket)
         }
         _ => {
             eprintln!("Usage: {} [client/server] address", args[0]);
-            return;
+            return Ok(());
         }
     };
 
-    let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake);
     let (mut box_stream_read, mut box_stream_write) =
-        BoxStream::new(&socket, &socket, key_nonce_send, key_nonce_recv).split_read_write();
+        BoxStream::from_handshake(&socket, &socket, handshake, 0x8000).split_read_write();
 
     match mode {
         "client" => {
@@ -75,9 +74,9 @@ fn main() {
                     &mut io::BufReader::with_capacity(BUF_SIZE, &mut io::stdin()),
                     &mut io::BufWriter::with_capacity(BUF_SIZE, &mut box_stream_write),
                 )
-                .unwrap();
+                .await?;
             } else {
-                io::copy(&mut io::stdin(), &mut box_stream_write).unwrap();
+                io::copy(&mut io::stdin(), &mut box_stream_write).await?;
             }
         }
         "server" => {
@@ -87,33 +86,12 @@ fn main() {
                     &mut io::BufReader::with_capacity(BUF_SIZE, &mut box_stream_read),
                     &mut io::BufWriter::with_capacity(BUF_SIZE, &mut io::stdout()),
                 )
-                .unwrap();
+                .await?;
             } else {
-                io::copy(&mut box_stream_read, &mut io::stdout()).unwrap();
+                io::copy(&mut box_stream_read, &mut io::stdout()).await?;
             }
         }
         _ => unreachable!(),
     }
-}
-
-// Copied from https://doc.rust-lang.org/src/std/io/util.rs.html#43 to be used with custom buffer
-// size.
-pub fn copy<R: ?Sized, W: ?Sized>(reader: &mut R, writer: &mut W) -> io::Result<u64>
-where
-    R: io::Read,
-    W: io::Write,
-{
-    let mut buf = [0; BUF_SIZE];
-
-    let mut written = 0;
-    loop {
-        let len = match reader.read(&mut buf) {
-            Ok(0) => return Ok(written),
-            Ok(len) => len,
-            Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(e) => return Err(e),
-        };
-        writer.write_all(&buf[..len])?;
-        written += len as u64;
-    }
+    Ok(())
 }

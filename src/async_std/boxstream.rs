@@ -60,7 +60,7 @@ impl<R: Read + Unpin, W: Write + Unpin> BoxStream<R, W> {
         (reader, writer)
     }
 
-    pub fn from_handhake(
+    pub fn from_handshake(
         read_stream: R,
         write_stream: W,
         handshake_complete: HandshakeComplete,
