@@ -44,17 +44,17 @@ async fn main() -> Result<(), Error> {
 
     let (handshake, socket) = match mode {
         "client" => {
-            let socket = TcpStream::connect(addr).await?;
+            let mut socket = TcpStream::connect(addr).await?;
 
-            let (_,  handshake) =
-                handshake_client(&socket, net_id, client_pk, client_sk, server_pk).await?;
+            let handshake =
+                handshake_client(&mut socket, net_id, client_pk, client_sk, server_pk).await?;
             (handshake, socket)
         }
         "server" => {
             let listener = TcpListener::bind(addr).await?;
-            let (socket, _) = listener.accept().await?;
+            let (mut socket, _) = listener.accept().await?;
 
-            let handshake = handshake_server(&socket, net_id, server_pk, server_sk).await?;
+            let handshake = handshake_server(&mut socket, net_id, server_pk, server_sk).await?;
             (handshake, socket)
         }
         _ => {

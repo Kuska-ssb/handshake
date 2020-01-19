@@ -3,6 +3,7 @@ use std::{convert, io, io::Read, io::Write};
 use crate::boxstream::{
     self, BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
 };
+use crate::handshake::HandshakeComplete;
 
 impl std::error::Error for boxstream::Error {}
 
@@ -71,15 +72,25 @@ impl<R: Read, W: Write> BoxStream<R, W> {
         key_nonce_send: KeyNonce,
         key_nonce_recv: KeyNonce,
     ) -> Self {
-        let reader = BoxStreamRead {
-            stream: read_stream,
-            bs_recv: BoxStreamRecv::new(key_nonce_recv),
-        };
-        let writer = BoxStreamWrite {
-            stream: write_stream,
-            bs_send: BoxStreamSend::new(key_nonce_send),
-        };
-        Self { reader, writer }
+        Self {
+            reader: BoxStreamRead {
+                stream: read_stream,
+                bs_recv: BoxStreamRecv::new(key_nonce_recv),
+            },
+            writer: BoxStreamWrite {
+                stream: write_stream,
+                bs_send: BoxStreamSend::new(key_nonce_send),
+            },
+        }
+    }
+
+    pub fn from_handshake(
+        read_stream: R,
+        write_stream: W,
+        handshake_complete: HandshakeComplete,
+    ) -> Self {
+        let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake_complete);
+        Self::new(read_stream, write_stream, key_nonce_send, key_nonce_recv)
     }
 }
 
@@ -133,7 +144,7 @@ mod tests {
         });
     }
 
-    // Send two small messages from peer a to peer b in a boxstream
+    // Send three messages from peer a to peer b in a boxstream
     fn boxstream_aux<R: Read + Send, W: Write + Send>(
         stream_a_read: R,
         stream_a_write: W,
@@ -145,9 +156,8 @@ mod tests {
         let msg_a0: Vec<u8> = (0..=255).collect();
         let msg_a1: Vec<u8> = (0..5000).map(|b| (b % 99) as u8).collect();
         let msg_a2: Vec<u8> = (0..=255).rev().collect();
-        let msg_a0_cpy = msg_a0.clone();
-        let msg_a1_cpy = msg_a1.clone();
-        let msg_a2_cpy = msg_a2.clone();
+        let msgs = vec![msg_a0, msg_a1, msg_a2];
+        let msgs_cpy = msgs.clone();
 
         thread::scope(|s| {
             let bs_a = BoxStream::new(
@@ -167,7 +177,7 @@ mod tests {
             let (_, mut bs_b_write) = bs_b.split_read_write();
 
             let handle_a = s.spawn(move |_| {
-                for msg in &[msg_a0_cpy, msg_a1_cpy, msg_a2_cpy] {
+                for msg in msgs {
                     let mut buf = vec![0; msg.len()];
                     bs_a_read.read_exact(&mut buf).unwrap();
                     assert_eq!(&buf[..], &msg[..]);
@@ -175,7 +185,7 @@ mod tests {
             });
 
             let handle_b = s.spawn(move |_| {
-                for msg in &[msg_a0, msg_a1, msg_a2] {
+                for msg in msgs_cpy {
                     bs_b_write.write_all(&msg).unwrap();
                     bs_b_write.flush().unwrap();
                 }

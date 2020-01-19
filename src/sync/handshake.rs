@@ -3,8 +3,8 @@ use std::{convert, io, io::Read, io::Write};
 // use log::debug;
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
+use super::error::{Error, Result};
 use crate::handshake::{self, Handshake, HandshakeComplete};
-use super::error::{Error,Result};
 
 impl convert::From<io::Error> for Error {
     fn from(error: io::Error) -> Self {
@@ -19,7 +19,7 @@ impl convert::From<handshake::Error> for Error {
 }
 
 pub fn handshake_client<T: Read + Write>(
-    mut stream: T,
+    stream: &mut T,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
@@ -48,7 +48,7 @@ pub fn handshake_client<T: Read + Write>(
 }
 
 pub fn handshake_server<T: Read + Write>(
-    mut stream: T,
+    stream: &mut T,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
@@ -92,7 +92,7 @@ mod tests {
         "0000000000000000000000000000000000000000000000000000000000000001";
 
     // Perform a handshake between two connected streams
-    fn handshake_aux<T: Write + Read + Send>(stream_client: T, stream_server: T) {
+    fn handshake_aux<T: Write + Read + Send>(mut stream_client: T, mut stream_server: T) {
         let net_id = auth::Key::from_slice(&hex::decode(NET_ID_HEX).unwrap()).unwrap();
         let (client_pk, client_sk) = ed25519::keypair_from_seed(
             &ed25519::Seed::from_slice(&hex::decode(CLIENT_SEED_HEX).unwrap()).unwrap(),
@@ -105,11 +105,12 @@ mod tests {
             let net_id_cpy = net_id.clone();
 
             let handle_client = s.spawn(move |_| {
-                handshake_client(stream_client, net_id, client_pk, client_sk, server_pk).unwrap()
+                handshake_client(&mut stream_client, net_id, client_pk, client_sk, server_pk)
+                    .unwrap()
             });
 
             let handle_server = s.spawn(move |_| {
-                handshake_server(stream_server, net_id_cpy, server_pk, server_sk).unwrap()
+                handshake_server(&mut stream_server, net_id_cpy, server_pk, server_sk).unwrap()
             });
 
             (handle_client.join().unwrap(), handle_server.join().unwrap())

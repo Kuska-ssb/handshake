@@ -23,12 +23,12 @@ impl convert::From<handshake::Error> for Error {
 }
 
 pub async fn handshake_client<T: Read + Write + Unpin>(
-    mut stream: T,
+    stream: &mut T,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
-) -> Result<(T,HandshakeComplete)> {
+) -> Result<HandshakeComplete> {
     let mut buf = [0; 128];
     let handshake = Handshake::new_client(net_id, pk, sk);
 
@@ -48,11 +48,11 @@ pub async fn handshake_client<T: Read + Write + Unpin>(
     stream.read_exact(&mut recv_buf).await?;
     let handshake = handshake.recv_server_accept(&mut recv_buf)?;
 
-    Ok((stream,handshake.complete()))
+    Ok(handshake.complete())
 }
 
 pub async fn handshake_server<T: Read + Write + Unpin>(
-    mut stream: T,
+    stream: &mut T,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
@@ -94,7 +94,7 @@ mod tests {
         "0000000000000000000000000000000000000000000000000000000000000001";
 
     // Perform a handshake between two connected streams
-    async fn handshake_aux<T: Write + Read + Unpin>(stream_client: T, stream_server: T) {
+    async fn handshake_aux<T: Write + Read + Unpin>(mut stream_client: T, mut stream_server: T) {
         let net_id = auth::Key::from_slice(&hex::decode(NET_ID_HEX).unwrap()).unwrap();
         let (client_pk, client_sk) = ed25519::keypair_from_seed(
             &ed25519::Seed::from_slice(&hex::decode(CLIENT_SEED_HEX).unwrap()).unwrap(),
@@ -105,11 +105,11 @@ mod tests {
 
         let net_id_cpy = net_id.clone();
 
-        let future_client = handshake_client(stream_client, net_id, client_pk, client_sk, server_pk);
-        let future_server = handshake_server(stream_server, net_id_cpy, server_pk, server_sk);
+        let future_client = handshake_client(&mut stream_client, net_id, client_pk, client_sk, server_pk);
+        let future_server = handshake_server(&mut stream_server, net_id_cpy, server_pk, server_sk);
 
         let (client_handshake, server_handshake) = future_client.join(future_server).await;
-        let (_, client_handshake) = client_handshake.unwrap();
+        let client_handshake = client_handshake.unwrap();
         let server_handshake = server_handshake.unwrap();
 
         assert_eq!(client_handshake.net_id, server_handshake.net_id);
