@@ -5,8 +5,8 @@ use sodiumoxide::crypto::{auth, sign::ed25519};
 use std::env;
 use std::net::{TcpListener, TcpStream};
 
-use kuska_handshake::SharedSecret;
 use kuska_handshake::sync::{self, handshake_client, handshake_server};
+use kuska_handshake::SharedSecret;
 
 fn usage(arg0: &str) {
     eprintln!(
@@ -26,12 +26,12 @@ fn print_shared_secret(shared_secret: &SharedSecret) {
 }
 
 fn test_server(
-    socket: TcpStream,
+    mut socket: TcpStream,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
 ) -> sync::Result<()> {
-    let handshake = handshake_server(&socket, net_id, pk, sk)?;
+    let handshake = handshake_server(&mut socket, net_id, pk, sk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);
@@ -39,13 +39,13 @@ fn test_server(
 }
 
 fn test_client(
-    socket: TcpStream,
+    mut socket: TcpStream,
     net_id: auth::Key,
     pk: ed25519::PublicKey,
     sk: ed25519::SecretKey,
     server_pk: ed25519::PublicKey,
 ) -> sync::Result<()> {
-    let handshake = handshake_client(&socket, net_id, pk, sk, server_pk)?;
+    let handshake = handshake_client(&mut socket, net_id, pk, sk, server_pk)?;
     println!("Handshake complete! 💃");
     println!("{:#?}", handshake);
     print_shared_secret(&handshake.shared_secret);

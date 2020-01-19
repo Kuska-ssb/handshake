@@ -60,6 +60,19 @@ impl<R: Read + Unpin, W: Write + Unpin> BoxStream<R, W> {
         (reader, writer)
     }
 
+    pub fn new(
+        read_stream: R,
+        write_stream: W,
+        key_nonce_send: KeyNonce,
+        key_nonce_recv: KeyNonce,
+        capacity: usize,
+    ) -> Self {
+        Self {
+            reader: BoxStreamRead::new(read_stream, key_nonce_recv, capacity),
+            writer: BoxStreamWrite::new(write_stream, key_nonce_send, capacity),
+        }
+    }
+
     pub fn from_handshake(
         read_stream: R,
         write_stream: W,
@@ -67,10 +80,7 @@ impl<R: Read + Unpin, W: Write + Unpin> BoxStream<R, W> {
         capacity: usize,
     ) -> Self {
         let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake_complete);
-        Self {
-            reader: BoxStreamRead::new(read_stream, key_nonce_recv, capacity),
-            writer: BoxStreamWrite::new(write_stream, key_nonce_send, capacity),
-        }
+        Self::new(read_stream, write_stream, key_nonce_send, key_nonce_recv, capacity)
     }
 }
 

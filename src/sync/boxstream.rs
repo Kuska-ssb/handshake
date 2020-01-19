@@ -3,6 +3,7 @@ use std::{convert, io, io::Read, io::Write};
 use crate::boxstream::{
     self, BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
 };
+use crate::handshake::HandshakeComplete;
 
 impl std::error::Error for boxstream::Error {}
 
@@ -71,15 +72,25 @@ impl<R: Read, W: Write> BoxStream<R, W> {
         key_nonce_send: KeyNonce,
         key_nonce_recv: KeyNonce,
     ) -> Self {
-        let reader = BoxStreamRead {
-            stream: read_stream,
-            bs_recv: BoxStreamRecv::new(key_nonce_recv),
-        };
-        let writer = BoxStreamWrite {
-            stream: write_stream,
-            bs_send: BoxStreamSend::new(key_nonce_send),
-        };
-        Self { reader, writer }
+        Self {
+            reader: BoxStreamRead {
+                stream: read_stream,
+                bs_recv: BoxStreamRecv::new(key_nonce_recv),
+            },
+            writer: BoxStreamWrite {
+                stream: write_stream,
+                bs_send: BoxStreamSend::new(key_nonce_send),
+            },
+        }
+    }
+
+    pub fn from_handshake(
+        read_stream: R,
+        write_stream: W,
+        handshake_complete: HandshakeComplete,
+    ) -> Self {
+        let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake_complete);
+        Self::new(read_stream, write_stream, key_nonce_send, key_nonce_recv)
     }
 }
 

@@ -44,17 +44,17 @@ fn main() {
 
     let (handshake, socket) = match mode {
         "client" => {
-            let socket = TcpStream::connect(addr).unwrap();
+            let mut socket = TcpStream::connect(addr).unwrap();
 
             let handshake =
-                handshake_client(&socket, net_id, client_pk, client_sk, server_pk).unwrap();
+                handshake_client(&mut socket, net_id, client_pk, client_sk, server_pk).unwrap();
             (handshake, socket)
         }
         "server" => {
             let listener = TcpListener::bind(addr).unwrap();
-            let (socket, _) = listener.accept().unwrap();
+            let (mut socket, _) = listener.accept().unwrap();
 
-            let handshake = handshake_server(&socket, net_id, server_pk, server_sk).unwrap();
+            let handshake = handshake_server(&mut socket, net_id, server_pk, server_sk).unwrap();
             (handshake, socket)
         }
         _ => {
