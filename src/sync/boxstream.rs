@@ -1,22 +1,9 @@
-use std::{convert, io, io::Read, io::Write};
+use std::{io, io::Read, io::Write};
 
 use crate::boxstream::{
-    self, BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
+    BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
 };
 use crate::handshake::HandshakeComplete;
-
-impl std::error::Error for boxstream::Error {}
-
-impl convert::From<boxstream::Error> for io::Error {
-    fn from(error: boxstream::Error) -> Self {
-        match error {
-            boxstream::Error::DecryptHeaderSecretbox => {
-                Self::new(io::ErrorKind::InvalidInput, error)
-            }
-            boxstream::Error::DecryptBodySecretbox => Self::new(io::ErrorKind::InvalidInput, error),
-        }
-    }
-}
 
 pub struct BoxStreamRead<R> {
     stream: R,
