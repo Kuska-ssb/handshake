@@ -1,9 +1,9 @@
 extern crate log;
 extern crate sodiumoxide;
 
+use crate::error::{Error, Result};
 use crate::handshake::HandshakeComplete;
 
-use core::fmt;
 use core::{cmp, mem};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
 
@@ -13,25 +13,6 @@ pub const MSG_BODY_MAX_LEN: usize = 4096;
 pub const MSG_HEADER_DEC_LEN: usize = 18;
 // Length of encrypted header (with MAC prefixed)
 pub const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
-
-#[derive(Debug)]
-pub enum Error {
-    DecryptHeaderSecretbox,
-    DecryptBodySecretbox,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::DecryptHeaderSecretbox => {
-                write!(f, "secretbox::open failed in header decryption")
-            }
-            Error::DecryptBodySecretbox => write!(f, "secretbox::open failed in body decryption"),
-        }
-    }
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
 
 pub struct KeyNonce {
     key: secretbox::Key,
@@ -192,9 +173,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> Result
             key_nonce.increment_nonce_be_inplace();
             Ok(Header::from_slice(&header_body_buf).unwrap())
         }
-        Err(()) => {
-            Err(Error::DecryptHeaderSecretbox)
-        }
+        Err(()) => Err(Error::DecryptHeaderSecretbox),
     }
 }
 
@@ -214,9 +193,7 @@ fn decrypt_box_stream_body(
             key_nonce.increment_nonce_be_inplace();
             Ok(header.body_len)
         }
-        Err(()) => {
-            Err(Error::DecryptBodySecretbox)
-        }
+        Err(()) => Err(Error::DecryptBodySecretbox),
     }
 }
 
@@ -293,10 +270,7 @@ mod tests {
         let key = secretbox::Key::from_slice(&hex::decode(KEY_HEX).unwrap()).unwrap();
         let nonce0 = secretbox::Nonce::from_slice(&hex::decode(NONCE0_HEX).unwrap()).unwrap();
         let nonce1 = secretbox::Nonce::from_slice(&hex::decode(NONCE1_HEX).unwrap()).unwrap();
-        let mut key_nonce = KeyNonce {
-            key,
-            nonce: nonce0,
-        };
+        let mut key_nonce = KeyNonce { key, nonce: nonce0 };
         key_nonce.increment_nonce_be_inplace();
         assert_eq!(key_nonce.nonce, nonce1);
     }

@@ -10,6 +10,7 @@ pub mod sync;
 pub mod async_std;
 
 mod boxstream;
+mod error;
 mod handshake;
 
 pub use boxstream::*;
