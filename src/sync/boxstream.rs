@@ -144,7 +144,7 @@ mod tests {
         });
     }
 
-    // Send two small messages from peer a to peer b in a boxstream
+    // Send three messages from peer a to peer b in a boxstream
     fn boxstream_aux<R: Read + Send, W: Write + Send>(
         stream_a_read: R,
         stream_a_write: W,
@@ -156,9 +156,8 @@ mod tests {
         let msg_a0: Vec<u8> = (0..=255).collect();
         let msg_a1: Vec<u8> = (0..5000).map(|b| (b % 99) as u8).collect();
         let msg_a2: Vec<u8> = (0..=255).rev().collect();
-        let msg_a0_cpy = msg_a0.clone();
-        let msg_a1_cpy = msg_a1.clone();
-        let msg_a2_cpy = msg_a2.clone();
+        let msgs = vec![msg_a0, msg_a1, msg_a2];
+        let msgs_cpy = msgs.clone();
 
         thread::scope(|s| {
             let bs_a = BoxStream::new(
@@ -178,7 +177,7 @@ mod tests {
             let (_, mut bs_b_write) = bs_b.split_read_write();
 
             let handle_a = s.spawn(move |_| {
-                for msg in &[msg_a0_cpy, msg_a1_cpy, msg_a2_cpy] {
+                for msg in msgs {
                     let mut buf = vec![0; msg.len()];
                     bs_a_read.read_exact(&mut buf).unwrap();
                     assert_eq!(&buf[..], &msg[..]);
@@ -186,7 +185,7 @@ mod tests {
             });
 
             let handle_b = s.spawn(move |_| {
-                for msg in &[msg_a0, msg_a1, msg_a2] {
+                for msg in msgs_cpy {
                     bs_b_write.write_all(&msg).unwrap();
                     bs_b_write.flush().unwrap();
                 }

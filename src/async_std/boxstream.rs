@@ -419,4 +419,105 @@ mod test {
 
         Ok(())
     }
+
+    use async_std::{io::Read, io::Write};
+    use test_utils::net_async::{net, net_fragment};
+
+    const CAPACITY: usize = 0x1010;
+
+    const KEY_A_HEX: &str = "8198e2d3456f022b2020f36ce874ad8b337a1c2da13f69f6458fd63415a51943";
+    const NONCE_A_HEX: &str = "a20fa8fe59a80f5f07c80265e5e7664582f0f553f36cd6ce";
+    const KEY_B_HEX: &str = "9bf1ec7af3f80934474e5ff73e27f2f5070f4fe4d80511923b7acb686463bfcc";
+    const NONCE_B_HEX: &str = "799762378d9e1d0a8a510a249dc4e76788d6ff9993efc5df";
+
+    struct Peer {
+        key_nonce_send: KeyNonce,
+        key_nonce_recv: KeyNonce,
+    }
+
+    fn load_peers() -> (Peer, Peer) {
+        let key_a = secretbox::Key::from_slice(&hex::decode(KEY_A_HEX).unwrap()).unwrap();
+        let nonce_a = secretbox::Nonce::from_slice(&hex::decode(NONCE_A_HEX).unwrap()).unwrap();
+        let key_b = secretbox::Key::from_slice(&hex::decode(KEY_B_HEX).unwrap()).unwrap();
+        let nonce_b = secretbox::Nonce::from_slice(&hex::decode(NONCE_B_HEX).unwrap()).unwrap();
+
+        let peer_a = Peer {
+            key_nonce_send: KeyNonce::new(key_a.clone(), nonce_a),
+            key_nonce_recv: KeyNonce::new(key_b.clone(), nonce_b),
+        };
+        let peer_b = Peer {
+            key_nonce_send: KeyNonce::new(key_b.clone(), nonce_b),
+            key_nonce_recv: KeyNonce::new(key_a.clone(), nonce_a),
+        };
+        (peer_a, peer_b)
+    }
+
+    #[async_std::test]
+    async fn test_boxstream_async() {
+        net(|a_rd, a_wr, b_rd, b_wr| boxstream_aux(a_rd, a_wr, b_rd, b_wr)).await;
+    }
+
+    #[async_std::test]
+    async fn test_boxstream_async_fragment() {
+        net_fragment(5, |a_rd, a_wr, b_rd, b_wr| {
+            boxstream_aux(a_rd, a_wr, b_rd, b_wr)
+        }).await;
+    }
+
+    async fn boxstream_aux_send<W: Write + Unpin>(mut bs_write: BoxStreamWrite<W>, msgs: Vec<Vec<u8>>) -> Result<()> {
+        for msg in msgs {
+            bs_write.write_all(&msg).await?;
+            bs_write.flush().await?;
+        }
+        Ok(())
+    }
+
+    async fn boxstream_aux_recv<R: Read + Unpin>(mut bs_read: BoxStreamRead<R>, msgs: Vec<Vec<u8>>) -> Result<()> {
+        for msg in &msgs {
+            let mut buf = vec![0; msg.len()];
+            bs_read.read_exact(&mut buf).await?;
+            assert_eq!(&buf[..], &msg[..]);
+        }
+        Ok(())
+    }
+
+    // Send three messages from peer a to peer b in a boxstream
+    async fn boxstream_aux<R: Read + Unpin, W: Write + Unpin>(
+        stream_a_read: R,
+        stream_a_write: W,
+        stream_b_read: R,
+        stream_b_write: W,
+    ) {
+        let (peer_a, peer_b) = load_peers();
+
+        let msg_a0: Vec<u8> = (0..=255).collect();
+        let msg_a1: Vec<u8> = (0..5000).map(|b| (b % 99) as u8).collect();
+        let msg_a2: Vec<u8> = (0..=255).rev().collect();
+        let msgs = vec![msg_a0, msg_a1, msg_a2];
+
+        let bs_a = BoxStream::new(
+            stream_a_read,
+            stream_a_write,
+            peer_a.key_nonce_send,
+            peer_a.key_nonce_recv,
+            CAPACITY,
+        );
+        let (mut bs_a_read, _) = bs_a.split_read_write();
+
+        let bs_b = BoxStream::new(
+            stream_b_read,
+            stream_b_write,
+            peer_b.key_nonce_send,
+            peer_b.key_nonce_recv,
+            CAPACITY,
+        );
+        let (_, mut bs_b_write) = bs_b.split_read_write();
+
+        let future_recv = boxstream_aux_recv(bs_a_read, msgs.clone());
+        let future_send = boxstream_aux_send(bs_b_write, msgs);
+
+        let (recv, send) = future_recv.join(future_send).await;
+        recv.unwrap();
+        send.unwrap();
+    }
 }
