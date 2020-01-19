@@ -17,13 +17,7 @@ tokio = { version = "0.2.6", features=["full"] }
 [dev-dependencies]
 test_utils = { path = "test_utils" }
 crossbeam = "0.7.3"
-rand = "0.7.2"
-serde = "1.0.104"
-serde_json = { version = "1.0.44", features=["preserve_order","arbitrary_precision"] }
-serde_derive = "1.0.104"
-dirs = "2.0"
 env_logger = "0.7.1"
-get_if_addrs = "0.5.3"
 base64 = "0.11.0"
 hex = "0.4.0"
 
@@ -34,10 +28,6 @@ async_std = []
 tokio_compat = [ "async_std" ]
 
 [[example]]
-name = "async"
-required-features = ["async"]
-
-[[example]]
 name = "handshake-boxstream-bench-sync"
 required-features = ["sync"]
 
@@ -46,7 +36,7 @@ name = "handshake-boxstream"
 required-features = ["sync"]
 
 [[example]]
-name = "handshake-nice"
+name = "handshake"
 required-features = ["sync"]
 
 [[example]]
