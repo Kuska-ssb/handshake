@@ -5,6 +5,8 @@ use crate::handshake::HandshakeComplete;
 
 use core::fmt;
 use core::{cmp, mem};
+use std::convert;
+use std::io;
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
 
 // Length of encrypted body (with MAC detached)
@@ -18,6 +20,19 @@ pub const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
 pub enum Error {
     DecryptHeaderSecretbox,
     DecryptBodySecretbox,
+}
+
+impl std::error::Error for Error {}
+
+impl convert::From<Error> for io::Error {
+    fn from(error: Error) -> Self {
+        match error {
+            Error::DecryptHeaderSecretbox => {
+                Self::new(io::ErrorKind::InvalidInput, error)
+            }
+            Error::DecryptBodySecretbox => Self::new(io::ErrorKind::InvalidInput, error),
+        }
+    }
 }
 
 impl fmt::Display for Error {

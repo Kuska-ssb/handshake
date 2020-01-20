@@ -50,24 +50,6 @@ impl CircularBuffer {
         self.end = 0;
         self.len = 0;
     }
-    pub fn write_from<R: Read>(&mut self, reader : &mut R) -> io::Result<()> {        
-        let mut readed = 1;
-
-        loop {
-            if readed==0 || self.len == self.buffer.len() {
-                return Ok(())
-            } else if self.start <= self.end {
-                // write at %end -> end_buffer 
-                readed = reader.read(&mut self.buffer[self.end..])?;
-                self.end = (readed + self.end) % self.buffer.len();
-            } else {
-                // write at %end -> %start
-                readed = reader.read(&mut self.buffer[self.end..self.start])?;
-                self.end += readed;
-            }
-            self.len += readed;
-        }
-    }
 
     pub fn defrag(&mut self) {
         if self.len > 0 {
@@ -276,7 +258,11 @@ mod test {
         // skip 3
         b.skip(3);
         assert_eq!("08", hex::encode(b.contiguous_value()));
-        
+
+        // clear
+        b.clear();
+        assert_eq!("", hex::encode(b.contiguous_value()));
+
         Ok(())
     }
 
