@@ -207,7 +207,7 @@ mod test {
     use super::*;
 
     #[test]
-    fn check_readwrite() -> io::Result<()> {
+    fn test_readwrite() -> io::Result<()> {
         let mut b = super::CircularBuffer::new(6);
         assert_eq!("",b.to_string());
 
@@ -257,7 +257,7 @@ mod test {
     }
 
     #[test]
-    fn check_peek_skip() -> io::Result<()> {
+    fn test_peek_skip() -> io::Result<()> {
         let mut b = super::CircularBuffer::new(6);
         assert_eq!("",b.to_string());
         
@@ -281,7 +281,7 @@ mod test {
     }
 
     #[test]
-    fn check_defrag_empty() -> io::Result<()> {
+    fn test_defrag_empty() -> io::Result<()> {
 
         // try to defrag when is empty
         let mut b = super::CircularBuffer::new(6);
@@ -296,7 +296,7 @@ mod test {
     }
 
     #[test]
-    fn check_defrag_end() -> io::Result<()> {
+    fn test_defrag_end() -> io::Result<()> {
         // defrag with some data at the end
         // 
         let mut b = super::CircularBuffer::new(6);
@@ -312,7 +312,7 @@ mod test {
     }
 
     #[test]
-    fn check_defrag_begin() -> io::Result<()> {
+    fn test_defrag_begin() -> io::Result<()> {
         // try to defrag with empty data begib
         // 
         let mut b = super::CircularBuffer::new(6);
@@ -328,7 +328,7 @@ mod test {
     }
 
     #[test]
-    fn check_fuzzing() -> io::Result<()> {
+    fn test_fuzzing() -> io::Result<()> {
         let mut r = [0u8;7];
         let mut b = super::CircularBuffer::new(r.len());
         for i in 0..10000 {            

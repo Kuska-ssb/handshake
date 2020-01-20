@@ -383,7 +383,7 @@ mod test {
     use sodiumoxide::crypto::{hash::sha256, secretbox};
 
     #[async_std::test]
-    async fn check_asyncbox1() -> io::Result<()> {
+    async fn test_asyncbox() -> io::Result<()> {
         let send_key_nonce = KeyNonce::new(
             secretbox::Key(sha256::hash(&[0]).0),
             secretbox::Nonce([0u8; 24]),
