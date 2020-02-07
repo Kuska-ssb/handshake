@@ -80,7 +80,13 @@ impl<R: Read + Unpin, W: Write + Unpin> BoxStream<R, W> {
         capacity: usize,
     ) -> Self {
         let (key_nonce_send, key_nonce_recv) = KeyNonce::from_handshake(handshake_complete);
-        Self::new(read_stream, write_stream, key_nonce_send, key_nonce_recv, capacity)
+        Self::new(
+            read_stream,
+            write_stream,
+            key_nonce_send,
+            key_nonce_recv,
+            capacity,
+        )
     }
 }
 
@@ -136,9 +142,12 @@ where
             this.cipher_off += len;
 
             // it there's not enough for filling the buffer return pending
-            //   waiting underlying write to wake 
+            //   waiting underlying write to wake
             if this.cipher_off < this.cipher_len {
-                trace!("  needs {} more bytes to decipher", this.cipher_len - this.cipher_off);
+                trace!(
+                    "  needs {} more bytes to decipher",
+                    this.cipher_len - this.cipher_off
+                );
                 return Poll::Pending;
             }
 
@@ -148,7 +157,7 @@ where
                 .bs_recv
                 .decrypt(&this.cipher[..this.cipher_len], &mut this.plain[..])
                 .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
-            
+
             trace!("  deciphered_len={}", written);
 
             // update how much bytes the next ciphered chunk is
@@ -269,7 +278,7 @@ where
             trace!("      ciphered #plain={} #encrypt={}", read, written);
 
             self.plain_off += read;
-            
+
             // ciphertext is ready to be written, so
             self.cipher_len = written;
             self.cipher_off = 0;
@@ -310,8 +319,7 @@ where
 
         // write as much plaintext as possible
         let len = cmp::min(MSG_BODY_MAX_LEN - this.plain_len, buf.len());
-        this.plain[this.plain_len..this.plain_len + len]
-            .copy_from_slice(&buf[..len]);
+        this.plain[this.plain_len..this.plain_len + len].copy_from_slice(&buf[..len]);
         this.plain_len += len;
         trace!("  written {} bytes", len);
 
@@ -378,8 +386,8 @@ fn assert_not_closed(actual: &Status) -> Poll<Result<()>> {
 
 #[cfg(test)]
 mod test {
-    use super::*;
     use super::super::circularbuffer::CircularBuffer;
+    use super::*;
     use sodiumoxide::crypto::{hash::sha256, secretbox};
 
     #[async_std::test]
@@ -461,10 +469,14 @@ mod test {
     async fn test_boxstream_async_fragment() {
         net_fragment(5, |a_rd, a_wr, b_rd, b_wr| {
             boxstream_aux(a_rd, a_wr, b_rd, b_wr)
-        }).await;
+        })
+        .await;
     }
 
-    async fn boxstream_aux_send<W: Write + Unpin>(mut bs_write: BoxStreamWrite<W>, msgs: Vec<Vec<u8>>) -> Result<()> {
+    async fn boxstream_aux_send<W: Write + Unpin>(
+        mut bs_write: BoxStreamWrite<W>,
+        msgs: Vec<Vec<u8>>,
+    ) -> Result<()> {
         for msg in msgs {
             bs_write.write_all(&msg).await?;
             bs_write.flush().await?;
@@ -472,7 +484,10 @@ mod test {
         Ok(())
     }
 
-    async fn boxstream_aux_recv<R: Read + Unpin>(mut bs_read: BoxStreamRead<R>, msgs: Vec<Vec<u8>>) -> Result<()> {
+    async fn boxstream_aux_recv<R: Read + Unpin>(
+        mut bs_read: BoxStreamRead<R>,
+        msgs: Vec<Vec<u8>>,
+    ) -> Result<()> {
         for msg in &msgs {
             let mut buf = vec![0; msg.len()];
             bs_read.read_exact(&mut buf).await?;

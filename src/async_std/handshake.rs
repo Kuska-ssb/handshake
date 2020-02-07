@@ -1,12 +1,7 @@
-use std::convert;
+use super::error::{Error, Result};
+use async_std::{io, io::Read, io::Write, prelude::*};
 use sodiumoxide::crypto::{auth, sign::ed25519};
-use async_std::{
-    prelude::*,
-    io,
-    io::Read,
-    io::Write
-};
-use super::error::{Error,Result};
+use std::convert;
 
 use crate::handshake::{self, Handshake, HandshakeComplete};
 
@@ -105,7 +100,8 @@ mod tests {
 
         let net_id_cpy = net_id.clone();
 
-        let future_client = handshake_client(&mut stream_client, net_id, client_pk, client_sk, server_pk);
+        let future_client =
+            handshake_client(&mut stream_client, net_id, client_pk, client_sk, server_pk);
         let future_server = handshake_server(&mut stream_server, net_id_cpy, server_pk, server_sk);
 
         let (client_handshake, server_handshake) = future_client.join(future_server).await;
@@ -131,7 +127,7 @@ mod tests {
 
     #[async_std::test]
     async fn test_handshake_async() {
-        net(|a, _, b, _| { handshake_aux(a, b) }).await;
+        net(|a, _, b, _| handshake_aux(a, b)).await;
     }
 
     #[async_std::test]

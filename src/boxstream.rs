@@ -5,9 +5,9 @@ use crate::handshake::HandshakeComplete;
 
 use core::fmt;
 use core::{cmp, mem};
+use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
 use std::convert;
 use std::io;
-use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
 
 // Length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
@@ -27,9 +27,7 @@ impl std::error::Error for Error {}
 impl convert::From<Error> for io::Error {
     fn from(error: Error) -> Self {
         match error {
-            Error::DecryptHeaderSecretbox => {
-                Self::new(io::ErrorKind::InvalidInput, error)
-            }
+            Error::DecryptHeaderSecretbox => Self::new(io::ErrorKind::InvalidInput, error),
             Error::DecryptBodySecretbox => Self::new(io::ErrorKind::InvalidInput, error),
         }
     }
@@ -207,9 +205,7 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> Result
             key_nonce.increment_nonce_be_inplace();
             Ok(Header::from_slice(&header_body_buf).unwrap())
         }
-        Err(()) => {
-            Err(Error::DecryptHeaderSecretbox)
-        }
+        Err(()) => Err(Error::DecryptHeaderSecretbox),
     }
 }
 
@@ -229,9 +225,7 @@ fn decrypt_box_stream_body(
             key_nonce.increment_nonce_be_inplace();
             Ok(header.body_len)
         }
-        Err(()) => {
-            Err(Error::DecryptBodySecretbox)
-        }
+        Err(()) => Err(Error::DecryptBodySecretbox),
     }
 }
 
@@ -308,10 +302,7 @@ mod tests {
         let key = secretbox::Key::from_slice(&hex::decode(KEY_HEX).unwrap()).unwrap();
         let nonce0 = secretbox::Nonce::from_slice(&hex::decode(NONCE0_HEX).unwrap()).unwrap();
         let nonce1 = secretbox::Nonce::from_slice(&hex::decode(NONCE1_HEX).unwrap()).unwrap();
-        let mut key_nonce = KeyNonce {
-            key,
-            nonce: nonce0,
-        };
+        let mut key_nonce = KeyNonce { key, nonce: nonce0 };
         key_nonce.increment_nonce_be_inplace();
         assert_eq!(key_nonce.nonce, nonce1);
     }
