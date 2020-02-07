@@ -502,7 +502,7 @@ mod test {
             peer_a.key_nonce_recv,
             CAPACITY,
         );
-        let (mut bs_a_read, _) = bs_a.split_read_write();
+        let (bs_a_read, _) = bs_a.split_read_write();
 
         let bs_b = BoxStream::new(
             stream_b_read,
@@ -511,7 +511,7 @@ mod test {
             peer_b.key_nonce_recv,
             CAPACITY,
         );
-        let (_, mut bs_b_write) = bs_b.split_read_write();
+        let (_, bs_b_write) = bs_b.split_read_write();
 
         let future_recv = boxstream_aux_recv(bs_a_read, msgs.clone());
         let future_send = boxstream_aux_send(bs_b_write, msgs);
