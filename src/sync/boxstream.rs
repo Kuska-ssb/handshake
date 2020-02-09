@@ -1,8 +1,6 @@
 use std::{io, io::Read, io::Write};
 
-use crate::boxstream::{
-    BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
-};
+use crate::boxstream::{BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN};
 use crate::handshake::HandshakeComplete;
 
 pub struct BoxStreamRead<R> {

@@ -45,4 +45,3 @@ impl<'a> Buffer<'a> {
         self.buf.len()
     }
 }
-

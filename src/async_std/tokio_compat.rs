@@ -1,18 +1,18 @@
-use tokio::net::tcp::{ReadHalf,WriteHalf};
+use tokio::net::tcp::{ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
 use async_std::io;
-use async_std::io::{Read,Write};
+use async_std::io::{Read, Write};
 use async_std::pin::Pin;
 use async_std::task::{Context, Poll};
 
 pub struct TokioCompat<T>(T);
 
 impl<T> TokioCompat<T> {
-  pub fn into_inner(self) -> T {
-    self.0
-  }
-} 
+    pub fn into_inner(self) -> T {
+        self.0
+    }
+}
 
 pub trait TokioCompatExt: tokio::io::AsyncRead + tokio::io::AsyncWrite + Sized {
     #[inline]
@@ -22,17 +22,17 @@ pub trait TokioCompatExt: tokio::io::AsyncRead + tokio::io::AsyncWrite + Sized {
 }
 
 pub trait TokioCompatExtRead: tokio::io::AsyncRead + Sized {
-  #[inline]
-  fn wrap(self) -> TokioCompat<Self> {
-      TokioCompat(self)
-  }
+    #[inline]
+    fn wrap(self) -> TokioCompat<Self> {
+        TokioCompat(self)
+    }
 }
 
 pub trait TokioCompatExtWrite: tokio::io::AsyncWrite + Sized {
-  #[inline]
-  fn wrap(self) -> TokioCompat<Self> {
-      TokioCompat(self)
-  }
+    #[inline]
+    fn wrap(self) -> TokioCompat<Self> {
+        TokioCompat(self)
+    }
 }
 
 impl<T: tokio::io::AsyncRead + Unpin> Read for TokioCompat<T> {
