@@ -9,13 +9,14 @@ use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox}
 use std::convert;
 use std::io;
 
-// Length of encrypted body (with MAC detached)
+/// Max length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
-// Length of decrypted header (body_len || enc_body_mac)
+/// Length of decrypted header (body_len || enc_body_mac)
 pub const MSG_HEADER_DEC_LEN: usize = 18;
-// Length of encrypted header (with MAC prefixed)
+/// Length of encrypted header (with MAC prefixed)
 pub const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
 
+/// The error type for boxstream operations.  Errors originate from decryption errors.
 #[derive(Debug)]
 pub enum Error {
     DecryptHeaderSecretbox,
@@ -44,18 +45,22 @@ impl fmt::Display for Error {
     }
 }
 
+/// The result type for boxstream operations.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// A pair of key and nonce used for encryption/decryption of every message in the boxstream.
 pub struct KeyNonce {
     key: secretbox::Key,
     nonce: secretbox::Nonce,
 }
 
 impl KeyNonce {
+    /// Creates a new `KeyNonce` from a key and a nonce.
     pub fn new(key: secretbox::Key, nonce: secretbox::Nonce) -> Self {
         Self { key, nonce }
     }
-    // Return (key_nonce_send, key_nonce_recv)
+    /// Derives the sender and receiver `KeyNonce` from a `HandshakeComplete`.  Returns
+    /// `(key_nonce_send, key_nonce_recv)`.
     pub fn from_handshake(handshake_complete: HandshakeComplete) -> (Self, Self) {
         let HandshakeComplete {
             net_id,
@@ -90,6 +95,8 @@ impl KeyNonce {
         (key_nonce_send, key_nonce_recv)
     }
 
+    /// Increments the nonce value by one.  The nonce value is encoded/decoded in big endian,
+    /// following the boxstream spec.
     pub fn increment_nonce_be_inplace(&mut self) {
         for n in (0..self.nonce.0.len()).rev() {
             let (inc, _) = self.nonce.0[n].overflowing_add(1);
@@ -101,6 +108,7 @@ impl KeyNonce {
     }
 }
 
+/// The header of a message in the boxstream.
 #[derive(Debug)]
 pub struct Header {
     body_len: usize,
@@ -108,6 +116,7 @@ pub struct Header {
 }
 
 impl Header {
+    /// Decodes `MSG_HEADER_DEC_LEN` length byte array to build a `Header`.
     pub fn from_bytes(buf: &[u8; MSG_HEADER_DEC_LEN]) -> Self {
         Self {
             body_len: u16::from_be_bytes([buf[0], buf[1]]) as usize,
@@ -115,6 +124,7 @@ impl Header {
         }
     }
 
+    /// Decodes `MSG_HEADER_DEC_LEN` bytes from a slice to build a `Header`.
     pub fn from_slice(buf: &[u8]) -> Option<Self> {
         if buf.len() != MSG_HEADER_DEC_LEN {
             return None;
@@ -125,6 +135,7 @@ impl Header {
         })
     }
 
+    /// Encodes the `Header` to a byte array.
     pub fn to_bytes(&self) -> [u8; MSG_HEADER_DEC_LEN] {
         concat!(
             MSG_HEADER_DEC_LEN,
@@ -134,8 +145,9 @@ impl Header {
     }
 }
 
-// Encrypt the final goodbye message.
-// note: nonce is not incremented since this *must* be the last nonce used
+/// Encrypt the final goodbye message into `enc`.  Returns the number of bytes written into `enc`.
+///
+/// Note that the nonce is not incremented since this **must** be the last nonce used.
 fn encrypt_box_stream_goodbye(key_nonce: &mut KeyNonce, enc: &mut [u8]) -> usize {
     let (goodbye_tag_buf, mut goodbye_header_buf) =
         enc[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
@@ -147,8 +159,9 @@ fn encrypt_box_stream_goodbye(key_nonce: &mut KeyNonce, enc: &mut [u8]) -> usize
     MSG_HEADER_LEN
 }
 
-// Encrypt a single message from buf into enc, return the number of bytes encryted from buf.
-fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) -> usize {
+/// Encrypt a single message from `buf` into `enc`.  Return the number of bytes read
+/// from `buf` and the number of bytes written into `enc`.
+fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) -> (usize, usize) {
     let body = &buf[..cmp::min(buf.len(), MSG_BODY_MAX_LEN)];
 
     let header_nonce = key_nonce.nonce;
@@ -168,30 +181,32 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) 
     header_body_buf.copy_from_slice(&header.to_bytes());
     let header_tag = secretbox::seal_detached(&mut header_body_buf, &header_nonce, &key_nonce.key);
     header_tag_buf.copy_from_slice(header_tag.as_ref());
-    body.len()
+    (body.len(), MSG_HEADER_LEN + body.len())
 }
 
-// Transport API agnostic boxstream sending side.
+/// The transport agnostic boxstream sending side.
 pub struct BoxStreamSend {
     key_nonce: KeyNonce,
 }
 
 impl BoxStreamSend {
+    /// Create a new `BoxStreamSend` from the `key_nonce`.
     pub fn new(key_nonce: KeyNonce) -> Self {
         Self { key_nonce }
     }
-    // Encrypt a single boxstream message by taking bytes from `buf` and encrypting them into
-    // `enc`.  Returns the number of bytes read from `buf` and the number of bytes written to
-    // `enc`.
+    /// Encrypt a single boxstream message by taking bytes from `buf` and encrypting them into
+    /// `enc`.  Returns the number of bytes read from `buf` and the number of bytes written into
+    /// `enc`.
     pub fn encrypt(&mut self, buf: &[u8], mut enc: &mut [u8]) -> (usize, usize) {
-        let n = encrypt_box_stream_msg(&mut self.key_nonce, buf, &mut enc);
-        (n, n + MSG_HEADER_LEN)
+        encrypt_box_stream_msg(&mut self.key_nonce, buf, &mut enc)
     }
+    /// Encript a goodbye message into `enc`.  Returns the number of bytes written into `enc`.
     pub fn encrypt_goodbye(&mut self, enc: &mut [u8]) -> usize {
         encrypt_box_stream_goodbye(&mut self.key_nonce, &mut enc[..])
     }
 }
 
+/// Decrypt and decode a boxstream `Header` from `buf`.
 fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> Result<Header> {
     let (header_tag_buf, mut header_body_buf) =
         buf[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
@@ -209,6 +224,8 @@ fn decrypt_box_stream_header(key_nonce: &mut KeyNonce, buf: &mut [u8]) -> Result
     }
 }
 
+/// Decrypt the body of a boxstream message from `buf` inplace.  Returns the number of bytes of the
+/// decrypted body in `buf`.
 fn decrypt_box_stream_body(
     header: &Header,
     key_nonce: &mut KeyNonce,
@@ -229,29 +246,35 @@ fn decrypt_box_stream_body(
     }
 }
 
+/// The state of a boxstream receiver.  It can be expecting a header or the body of a previously
+/// received header.
 #[derive(Debug)]
 enum RecvState {
     ExpectHeader,
     ExpectBody(Header),
 }
 
-// Transport API agnostic boxstream receiving side.
+/// The transport agnostic boxstream receiving side.
 pub struct BoxStreamRecv {
     key_nonce: KeyNonce,
     state: RecvState,
 }
 
+// TODO: Handle goodbye
 impl BoxStreamRecv {
+    /// Create a new `BoxStreamRecv` from the `key_nonce`.
     pub fn new(key_nonce: KeyNonce) -> Self {
         Self {
             key_nonce,
             state: RecvState::ExpectHeader,
         }
     }
-    // Decrypt a single boxstream message every two calls (one to decrypt and parse the header, the
-    // other do decrypt the body) by decrypting from `buf` and writting the plaintex to `dec`.
-    // Returns the number of bytes read from `bud` and the number of bytes written to `dec`.
+    /// Decrypt a single boxstream message every two calls (one to decrypt and parse the header, the
+    /// other do decrypt the body) by decrypting from `buf` and writting the plaintex into `dec`.
+    /// Returns the number of bytes read from `buf` and the number of bytes written into `dec`.
     pub fn decrypt(&mut self, buf: &[u8], dec: &mut [u8]) -> Result<(usize, usize)> {
+        // NOTE: Maybe this check should be removed because reading 0 bytes can be understood as
+        // EOF in a Read trait api.
         let n = self.recv_bytes();
         if buf.len() < n {
             return Ok((0, 0));
@@ -277,6 +300,7 @@ impl BoxStreamRecv {
         }
     }
 
+    /// Returns the number of received bytes needed for the next `decrypt` call.
     pub fn recv_bytes(&self) -> usize {
         match &self.state {
             RecvState::ExpectHeader => MSG_HEADER_LEN,
@@ -350,20 +374,22 @@ mod tests {
 
         let msg_a0: Vec<u8> = (0..=255).collect();
         let msg_a1: Vec<u8> = (0..=255).rev().collect();
+        let msg_a2: Vec<u8> = (0..=255).collect();
 
         // Send two messages from A to B
-        for msg_a in &[msg_a0, msg_a1] {
+        for msg_a in &[msg_a0, msg_a1, msg_a2] {
             // A
             let send_buf_a = {
-                let n = encrypt_box_stream_msg(&mut peer_a.key_nonce_send, &msg_a, &mut buf_a);
+                let (n_read, n_write) =
+                    encrypt_box_stream_msg(&mut peer_a.key_nonce_send, &msg_a, &mut buf_a);
                 // Assert that 256 bytes have been encrypted from msg_a
-                assert_eq!(n, 256);
-                &buf_a[..MSG_HEADER_LEN + n]
+                assert_eq!(n_read, 256);
+                &buf_a[..n_write]
             };
 
             // B
-            buf_b[..send_buf_a.len()].copy_from_slice(send_buf_a);
             let mut recv_buf_b = &mut buf_b[..send_buf_a.len()];
+            recv_buf_b.copy_from_slice(send_buf_a);
             let dec_msg_a = {
                 let header =
                     decrypt_box_stream_header(&mut peer_b.key_nonce_recv, &mut recv_buf_b).unwrap();
@@ -375,6 +401,51 @@ mod tests {
                 // Assert that the decrypted bytes are all the received bytes
                 assert_eq!(n, enc_body.len());
                 &enc_body[..n]
+            };
+            // Assert that the decrypted message is the message that was encrypted
+            assert_eq!(&dec_msg_a[..], &msg_a[..]);
+        }
+    }
+
+    #[test]
+    fn test_boxstream_send_recv() {
+        let (peer_a, peer_b) = load_peers();
+
+        let mut sender = BoxStreamSend::new(peer_a.key_nonce_send);
+        let mut receiver = BoxStreamRecv::new(peer_b.key_nonce_recv);
+
+        let mut buf_a = [0; 4096];
+        let mut buf_b = [0; 4096];
+
+        let msg_a0: Vec<u8> = (0..=255).collect();
+        let msg_a1: Vec<u8> = (0..=255).rev().collect();
+        let msg_a2: Vec<u8> = (0..=255).collect();
+
+        // Send two messages from A to B
+        for msg_a in &[msg_a0, msg_a1, msg_a2] {
+            // A
+            let send_buf_a = {
+                let (n_read, n_write) = sender.encrypt(&msg_a, &mut buf_a);
+                // Assert that 256 bytes have been encrypted from msg_a
+                assert_eq!(n_read, 256);
+                assert_eq!(n_write, MSG_HEADER_LEN + 256);
+                &buf_a[..n_write]
+            };
+
+            let mut recv_buf_a = send_buf_a;
+
+            // B
+            let dec_msg_a = {
+                // Decrypt header
+                let (n_read, n_write) = receiver.decrypt(&recv_buf_a, &mut buf_b).unwrap();
+                assert_eq!(n_read, MSG_HEADER_LEN);
+                assert_eq!(n_write, 0);
+                recv_buf_a = &recv_buf_a[n_read..];
+                // Decrypt body
+                let (n_read, n_write) = receiver.decrypt(&recv_buf_a, &mut buf_b).unwrap();
+                assert_eq!(n_read, 256);
+                assert_eq!(n_write, 256);
+                &buf_b[..n_write]
             };
             // Assert that the decrypted message is the message that was encrypted
             assert_eq!(&dec_msg_a[..], &msg_a[..]);
