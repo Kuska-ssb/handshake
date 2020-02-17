@@ -260,6 +260,7 @@ pub struct BoxStreamRecv {
     state: RecvState,
 }
 
+// TODO: Handle goodbye
 impl BoxStreamRecv {
     /// Create a new `BoxStreamRecv` from the `key_nonce`.
     pub fn new(key_nonce: KeyNonce) -> Self {
@@ -373,9 +374,10 @@ mod tests {
 
         let msg_a0: Vec<u8> = (0..=255).collect();
         let msg_a1: Vec<u8> = (0..=255).rev().collect();
+        let msg_a2: Vec<u8> = (0..=255).collect();
 
         // Send two messages from A to B
-        for msg_a in &[msg_a0, msg_a1] {
+        for msg_a in &[msg_a0, msg_a1, msg_a2] {
             // A
             let send_buf_a = {
                 let (n_read, n_write) =
@@ -386,8 +388,8 @@ mod tests {
             };
 
             // B
-            buf_b[..send_buf_a.len()].copy_from_slice(send_buf_a);
             let mut recv_buf_b = &mut buf_b[..send_buf_a.len()];
+            recv_buf_b.copy_from_slice(send_buf_a);
             let dec_msg_a = {
                 let header =
                     decrypt_box_stream_header(&mut peer_b.key_nonce_recv, &mut recv_buf_b).unwrap();
@@ -399,6 +401,51 @@ mod tests {
                 // Assert that the decrypted bytes are all the received bytes
                 assert_eq!(n, enc_body.len());
                 &enc_body[..n]
+            };
+            // Assert that the decrypted message is the message that was encrypted
+            assert_eq!(&dec_msg_a[..], &msg_a[..]);
+        }
+    }
+
+    #[test]
+    fn test_boxstream_send_recv() {
+        let (peer_a, peer_b) = load_peers();
+
+        let mut sender = BoxStreamSend::new(peer_a.key_nonce_send);
+        let mut receiver = BoxStreamRecv::new(peer_b.key_nonce_recv);
+
+        let mut buf_a = [0; 4096];
+        let mut buf_b = [0; 4096];
+
+        let msg_a0: Vec<u8> = (0..=255).collect();
+        let msg_a1: Vec<u8> = (0..=255).rev().collect();
+        let msg_a2: Vec<u8> = (0..=255).collect();
+
+        // Send two messages from A to B
+        for msg_a in &[msg_a0, msg_a1, msg_a2] {
+            // A
+            let send_buf_a = {
+                let (n_read, n_write) = sender.encrypt(&msg_a, &mut buf_a);
+                // Assert that 256 bytes have been encrypted from msg_a
+                assert_eq!(n_read, 256);
+                assert_eq!(n_write, MSG_HEADER_LEN + 256);
+                &buf_a[..n_write]
+            };
+
+            let mut recv_buf_a = send_buf_a;
+
+            // B
+            let dec_msg_a = {
+                // Decrypt header
+                let (n_read, n_write) = receiver.decrypt(&recv_buf_a, &mut buf_b).unwrap();
+                assert_eq!(n_read, MSG_HEADER_LEN);
+                assert_eq!(n_write, 0);
+                recv_buf_a = &recv_buf_a[n_read..];
+                // Decrypt body
+                let (n_read, n_write) = receiver.decrypt(&recv_buf_a, &mut buf_b).unwrap();
+                assert_eq!(n_read, 256);
+                assert_eq!(n_write, 256);
+                &buf_b[..n_write]
             };
             // Assert that the decrypted message is the message that was encrypted
             assert_eq!(&dec_msg_a[..], &msg_a[..]);
