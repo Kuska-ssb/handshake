@@ -533,30 +533,36 @@ mod tests {
         let hs_client = Handshake::new_client(net_id.clone(), client_pk, client_sk);
         let hs_server = Handshake::new_server(net_id, server_pk, server_sk);
 
+        let mut buf = [0; 5000];
+
         let (hs_client, hs_server) = {
-            let mut client_buf = [0; CLIENT_HELLO_BYTES];
+            let mut client_buf = &mut buf[..hs_client.send_bytes()];
             let hs_client = hs_client.send_client_hello(&mut client_buf);
-            let hs_server = hs_server.recv_client_hello(&mut client_buf).unwrap();
+            let mut server_buf = &mut buf[..hs_server.recv_bytes()];
+            let hs_server = hs_server.recv_client_hello(&mut server_buf).unwrap();
             (hs_client, hs_server)
         };
         let (hs_client, hs_server) = {
-            let mut server_buf = [0; SERVER_HELLO_BYTES];
+            let mut server_buf = &mut buf[..hs_server.send_bytes()];
             let hs_server = hs_server.send_server_hello(&mut server_buf);
-            let hs_client = hs_client.recv_server_hello(&mut server_buf).unwrap();
+            let mut client_buf = &mut buf[..hs_client.recv_bytes()];
+            let hs_client = hs_client.recv_server_hello(&mut client_buf).unwrap();
             (hs_client, hs_server)
         };
         let (hs_client, hs_server) = {
-            let mut client_buf = [0; CLIENT_AUTH_BYTES];
+            let mut client_buf = &mut buf[..hs_client.send_bytes()];
             let hs_client = hs_client
                 .send_client_auth(&mut client_buf, server_pk)
                 .unwrap();
-            let hs_server = hs_server.recv_client_auth(&mut client_buf).unwrap();
+            let mut server_buf = &mut buf[..hs_server.recv_bytes()];
+            let hs_server = hs_server.recv_client_auth(&mut server_buf).unwrap();
             (hs_client, hs_server)
         };
         let (hs_client, hs_server) = {
-            let mut server_buf = [0; SERVER_ACCEPT_BYTES];
+            let mut server_buf = &mut buf[..hs_server.send_bytes()];
             let hs_server = hs_server.send_server_accept(&mut server_buf);
-            let hs_client = hs_client.recv_server_accept(&mut server_buf).unwrap();
+            let mut client_buf = &mut buf[..hs_client.recv_bytes()];
+            let hs_client = hs_client.recv_server_accept(&mut client_buf).unwrap();
             (hs_client, hs_server)
         };
 
