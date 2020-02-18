@@ -1,0 +1,84 @@
+[config]
+skip_core_tasks = true
+
+[env]
+RUST_BACKTRACE = "full"
+RUSTFLAGS = "-D warnings"
+# CARGO_TERM_VERBOSE = "true"
+CARGO_TERM_VERBOSE = "false"
+
+[tasks.build-all-features]
+command = "cargo"
+# args = ["build", "--all-features", "--all-targets"]
+args = ["build", "--all-features"]
+
+[tasks.build-no-features]
+command = "cargo"
+args = ["build", "--verbose"]
+
+[tasks.build-sync]
+command = "cargo"
+args = ["build", "--features", "sync"]
+
+[tasks.build-async-std]
+command = "cargo"
+args = ["build", "--features", "async_std"]
+
+[tasks.build-async-std-tokio-compat]
+command = "cargo"
+args = ["build", "--features", "async_std tokio_compat"]
+
+[tasks.build]
+dependencies = [
+"build-all-features",
+"build-no-features",
+"build-sync",
+"build-async-std",
+"build-async-std-tokio-compat",
+]
+
+[tasks.test-all-features]
+command = "cargo"
+#args = ["test", "--all-features", "--all-targets"]
+args = ["test", "--all-features"]
+
+[tasks.test-no-features]
+command = "cargo"
+args = ["test", "--verbose"]
+
+[tasks.test-sync]
+command = "cargo"
+args = ["test", "--features", "sync"]
+
+[tasks.test-async-std]
+command = "cargo"
+args = ["test", "--features", "async_std"]
+
+[tasks.test-async-std-tokio-compat]
+command = "cargo"
+args = ["test", "--features", "async_std tokio_compat"]
+
+[tasks.test]
+dependencies = [
+"test-all-features",
+"test-no-features",
+"test-sync",
+"test-async-std",
+"test-async-std-tokio-compat",
+]
+
+[tasks.codecov]
+command = "cargo"
+args = ["tarpaulin", "--verbose", "--all-features"]
+
+[tasks.clippy]
+command = "cargo"
+args = ["clippy", "--all-features", "--", "-D", "warnings" ]
+
+[tasks.default]
+dependencies = [
+"build",
+"test",
+"clippy",
+"codecov",
+]
