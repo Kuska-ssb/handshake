@@ -7,7 +7,7 @@ use async_std::{
 use log::trace;
 use std::cmp;
 
-use crate::boxstream::{BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN};
+use crate::boxstream::{BoxStreamRecv, BoxStreamSend, Decrypted, KeyNonce, MSG_BODY_MAX_LEN};
 use crate::handshake::HandshakeComplete;
 
 #[derive(Debug, PartialEq)]
@@ -153,10 +153,17 @@ where
 
             // all cipher data collected, decipher it
             // TODO(adria0) check if _readed matters here
-            let (_readed, written) = this
+            let (_readed, written) = match this
                 .bs_recv
-                .decrypt(&this.cipher[..this.cipher_len], &mut this.plain[..])
-                .map_err(|err| Error::new(ErrorKind::InvalidData, err))?;
+                .decrypt(&this.cipher[..this.cipher_len], &mut this.plain[..])?
+            {
+                Decrypted::Goodbye => {
+                    trace!("  got goodbye");
+                    this.status = Status::Closed;
+                    return Poll::Ready(Ok(0));
+                }
+                Decrypted::Some(v) => v,
+            };
 
             trace!("  deciphered_len={}", written);
 
@@ -165,13 +172,6 @@ where
             this.cipher_len = this.bs_recv.recv_bytes();
 
             trace!("  new cipher_len={}", this.cipher_len);
-
-            // if recv_bytes is zero, we got a goodbye
-            if this.cipher_len == 0 {
-                trace!("  got goodbye");
-                this.status = Status::Closed;
-                return Poll::Ready(Ok(0));
-            }
 
             // if no data has been deciphered, it is only the header,
             //  do force to process the body
@@ -273,7 +273,7 @@ where
             let (read, written) = self.bs_send.encrypt(
                 &self.plain[self.plain_off..self.plain_len],
                 &mut self.cipher[..],
-            );
+            )?;
 
             trace!("      ciphered #plain={} #encrypt={}", read, written);
 
@@ -355,7 +355,7 @@ where
             // fill again the cipher buffer and...
             this.status = Status::Closing;
 
-            this.cipher_len = this.bs_send.encrypt_goodbye(&mut this.cipher[..]);
+            this.cipher_len = this.bs_send.encrypt_goodbye(&mut this.cipher[..])?;
             this.cipher_off = 0;
 
             // force to re-call this function again

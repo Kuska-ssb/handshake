@@ -1,6 +1,8 @@
 use std::{io, io::Read, io::Write};
 
-use crate::boxstream::{BoxStreamRecv, BoxStreamSend, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN};
+use crate::boxstream::{
+    BoxStreamRecv, BoxStreamSend, Decrypted, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
+};
 use crate::handshake::HandshakeComplete;
 
 pub struct BoxStreamRead<R> {
@@ -15,7 +17,10 @@ impl<R: Read> Read for BoxStreamRead<R> {
         for _ in 0..2 {
             let recv_bytes = self.bs_recv.recv_bytes();
             self.stream.read_exact(&mut enc[..recv_bytes])?;
-            let (_, m) = self.bs_recv.decrypt(&enc[..recv_bytes], buf)?;
+            let (_, m) = match self.bs_recv.decrypt(&enc[..recv_bytes], buf)? {
+                Decrypted::Goodbye => return Ok(0),
+                Decrypted::Some(v) => v,
+            };
             n += m;
         }
         Ok(n)
@@ -30,13 +35,22 @@ pub struct BoxStreamWrite<W> {
 impl<W: Write> Write for BoxStreamWrite<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let mut enc = [0; MSG_HEADER_LEN + MSG_BODY_MAX_LEN];
-        let (n, m) = self.bs_send.encrypt(buf, &mut enc);
+        let (n, m) = self.bs_send.encrypt(buf, &mut enc)?;
         self.stream.write_all(&enc[..m])?;
         Ok(n)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         self.stream.flush()
+    }
+}
+
+impl<W: Write> BoxStreamWrite<W> {
+    pub fn goodbye(&mut self) -> io::Result<()> {
+        let mut enc = [0; MSG_HEADER_LEN];
+        let m = self.bs_send.encrypt_goodbye(&mut enc)?;
+        self.stream.write_all(&enc[..m])?;
+        Ok(())
     }
 }
 
@@ -167,6 +181,11 @@ mod tests {
                     bs_a_read.read_exact(&mut buf).unwrap();
                     assert_eq!(&buf[..], &msg[..]);
                 }
+                // Receive goodbye
+                let mut buf = [0; MSG_HEADER_LEN];
+                assert_eq!(0, bs_a_read.read(&mut buf).unwrap());
+                // read after goodbye returns error
+                bs_a_read.read(&mut buf).unwrap_err();
             });
 
             let handle_b = s.spawn(move |_| {
@@ -174,6 +193,10 @@ mod tests {
                     bs_b_write.write_all(&msg).unwrap();
                     bs_b_write.flush().unwrap();
                 }
+                bs_b_write.goodbye().unwrap();
+                bs_b_write.flush().unwrap();
+                // write after goodbye returns error
+                bs_b_write.write(&[0, 1, 2, 3]).unwrap_err();
             });
 
             handle_a.join().unwrap();
