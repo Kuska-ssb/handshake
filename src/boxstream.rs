@@ -244,6 +244,8 @@ pub enum Decrypted<T> {
 }
 
 impl<T> Decrypted<T> {
+    /// Moves the value v out of the Decrypted<T> if it is Some(v).  Panics if Decrypted<T> is
+    /// Goodbye.
     pub fn unwrap(self) -> T {
         match self {
             Decrypted::Some(val) => val,
