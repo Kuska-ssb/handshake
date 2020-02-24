@@ -2,12 +2,16 @@ extern crate sodiumoxide;
 
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 
+/// Helper type used to define the kind of private key in a scalar multiplication.  Used to define
+/// scalar multiplication errors.
 #[derive(Debug)]
 pub enum ScalarMultSk {
     Ephemeral,
     LongTerm,
 }
 
+/// Helper type used to define the kind of public key in a scalar multiplication.  Used to define
+/// scalar multiplication errors.
 #[derive(Debug)]
 pub enum ScalarMultPk {
     ClientEphemeral,
@@ -16,6 +20,7 @@ pub enum ScalarMultPk {
     ServerLongTerm,
 }
 
+/// The error type for handshake operations.
 #[derive(Debug)]
 pub enum Error {
     RecvServerHelloAuth,
@@ -29,6 +34,7 @@ pub enum Error {
     RecvClientAuthScalarmult(ScalarMultSk, ScalarMultPk),
 }
 
+/// The result type for handshake operations.
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -38,6 +44,7 @@ pub struct SharedSecretPartial {
     aB: curve25519::GroupElement,
 }
 
+/// The shared secret obtained after a successful handshake.
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_snake_case)]
 pub struct SharedSecret {
@@ -46,6 +53,7 @@ pub struct SharedSecret {
     pub Ab: curve25519::GroupElement,
 }
 
+/// The initialization data of a handshake that exists in every state of the handshake.
 #[derive(Debug)]
 pub struct HandshakeBase {
     net_id: auth::Key,
@@ -55,6 +63,10 @@ pub struct HandshakeBase {
     ephemeral_sk: curve25519::Scalar,
 }
 
+/// The `Handshake` type maintains the different states that happen in each step of the handshake,
+/// allowing it to advance to completion.
+///
+/// The `Handshake` follows the [typestate pattern](http://cliffle.com/blog/rust-typestate/).
 #[derive(Debug)]
 pub struct Handshake<S: State> {
     pub base: HandshakeBase,
@@ -62,17 +74,22 @@ pub struct Handshake<S: State> {
 }
 
 // Client States
+
+/// The client state that can send the client hello.
 #[derive(Debug)]
 pub struct SendClientHello;
 
+/// The client state that can receive the server hello.
 #[derive(Debug)]
 pub struct RecvServerHello;
 
+/// The client state that can send the client auth.
 #[derive(Debug)]
 pub struct SendClientAuth {
     server_ephemeral_pk: curve25519::GroupElement,
 }
 
+/// The client state that can receive the server accept.
 #[derive(Debug)]
 pub struct RecvServerAccept {
     server_pk: ed25519::PublicKey,
@@ -82,21 +99,26 @@ pub struct RecvServerAccept {
 }
 
 // Server States
+
+/// The server state that can receive the client hello.
 #[derive(Debug)]
 pub struct RecvClientHello;
 
+/// The server state that can send the server hello.
 #[derive(Debug)]
 pub struct SendServerHello {
     client_ephemeral_pk: curve25519::GroupElement,
     shared_secret_partial: SharedSecretPartial,
 }
 
+/// The server state that can receive the client auth.
 #[derive(Debug)]
 pub struct RecvClientAuth {
     client_ephemeral_pk: curve25519::GroupElement,
     shared_secret_partial: SharedSecretPartial,
 }
 
+/// The server state that can send the server accept.
 #[derive(Debug)]
 #[allow(non_snake_case)]
 pub struct SendServerAccept {
@@ -106,7 +128,7 @@ pub struct SendServerAccept {
     client_sig: ed25519::Signature,
 }
 
-// Shared States
+/// The client/server state reached when a handshake has been performed.
 #[derive(Debug)]
 pub struct Complete {
     pub peer_pk: ed25519::PublicKey,
@@ -114,6 +136,21 @@ pub struct Complete {
     pub shared_secret: SharedSecret,
 }
 
+/// The `State` trait is used to implement the typestate pattern for the `Handshake`.
+///
+/// The state machine is as follows:
+///
+/// Client:
+/// - [`SendClientHello`] - `send_client_hello()` -> [`RecvServerHello]
+/// - [`RecvServerHello`] - `recv_server_hello()` -> [`SendClientAuth]
+/// - [`SendClientAuth`] - `send_client_auth()` -> [`RecvServerAccept]
+/// - [`RecvServerAccept`] - `recv_server_accept()` -> [`Complete]
+///
+/// Server:
+/// - [`RecvClientHello`] - `recv_client_hello()` -> [`SendServerHello`]
+/// - [`SendServerHello`] - `send_server_hello()` -> [`RecvClientAuth`]
+/// - [`RecvClientAuth`] - `recv_client_auth()` -> [`SendServerAccept`]
+/// - [`SendServerAccept`] - `send_server_accept()` -> [`Complete`]
 pub trait State {}
 impl State for SendClientHello {}
 impl State for RecvServerHello {}
@@ -129,6 +166,7 @@ impl State for Complete {}
 
 // Client
 impl Handshake<SendClientHello> {
+    /// Create a new handshake client that can send the client hello.
     pub fn new_client(
         net_id: auth::Key,
         pk: ed25519::PublicKey,
@@ -149,9 +187,11 @@ impl Handshake<SendClientHello> {
     }
 }
 
+/// Size of the client hello message.
 pub const CLIENT_HELLO_BYTES: usize = 64;
 
 impl Handshake<SendClientHello> {
+    /// Send a client hello and advance to the next client state.
     pub fn send_client_hello(self, send_buf: &mut [u8]) -> Handshake<RecvServerHello> {
         concat_into!(
             send_buf,
@@ -164,12 +204,14 @@ impl Handshake<SendClientHello> {
             state,
         }
     }
+    /// Number of bytes that will be written to the `send_buf` in this state.
     pub const fn send_bytes(&self) -> usize {
         CLIENT_HELLO_BYTES
     }
 }
 
 impl Handshake<RecvServerHello> {
+    /// Receive a server hello and advance to the next client state.
     pub fn recv_server_hello(self, recv_buf: &[u8]) -> Result<Handshake<SendClientAuth>> {
         let server_hmac = auth::Tag::from_slice(&recv_buf[..32]).unwrap();
         let server_ephemeral_pk = curve25519::GroupElement::from_slice(&recv_buf[32..]).unwrap();
@@ -187,14 +229,17 @@ impl Handshake<RecvServerHello> {
             },
         })
     }
+    /// Number of bytes that will be read from the `recv_buf` in this state.
     pub const fn recv_bytes(&self) -> usize {
         SERVER_HELLO_BYTES
     }
 }
 
+/// Size of the client auth message.
 pub const CLIENT_AUTH_BYTES: usize = 112;
 
 impl Handshake<SendClientAuth> {
+    /// Send a client auth and advance to the next client state.
     pub fn send_client_auth(
         self,
         send_buf: &mut [u8],
@@ -252,6 +297,7 @@ impl Handshake<SendClientAuth> {
             },
         })
     }
+    /// Number of bytes that will be written to the `send_buf` in this state.
     pub const fn send_bytes(&self) -> usize {
         CLIENT_AUTH_BYTES
     }
@@ -302,6 +348,7 @@ impl Handshake<RecvServerAccept> {
             },
         })
     }
+    /// Number of bytes that will be read from the `recv_buf` in this state.
     pub const fn recv_bytes(&self) -> usize {
         SERVER_ACCEPT_BYTES
     }
@@ -309,6 +356,7 @@ impl Handshake<RecvServerAccept> {
 
 // Server
 impl Handshake<RecvClientHello> {
+    /// Create a new handshake server that can receive the client hello.
     pub fn new_server(
         net_id: auth::Key,
         pk: ed25519::PublicKey,
@@ -331,6 +379,7 @@ impl Handshake<RecvClientHello> {
 }
 
 impl Handshake<RecvClientHello> {
+    /// Receive a client hello and advance to the next server state.
     pub fn recv_client_hello(self, recv_buf: &[u8]) -> Result<Handshake<SendServerHello>> {
         let client_hmac = auth::Tag::from_slice(&recv_buf[..32]).unwrap();
         let client_ephemeral_pk = curve25519::GroupElement::from_slice(&recv_buf[32..]).unwrap();
@@ -356,14 +405,17 @@ impl Handshake<RecvClientHello> {
             },
         })
     }
+    /// Number of bytes that will be read from the `recv_buf` in this state.
     pub const fn recv_bytes(&self) -> usize {
         CLIENT_HELLO_BYTES
     }
 }
 
+/// Size of the server hello message.
 pub const SERVER_HELLO_BYTES: usize = 64;
 
 impl Handshake<SendServerHello> {
+    /// Send a server hello and advance to the next server state.
     pub fn send_server_hello(self, send_buf: &mut [u8]) -> Handshake<RecvClientAuth> {
         concat_into!(
             send_buf,
@@ -378,12 +430,14 @@ impl Handshake<SendServerHello> {
             },
         }
     }
+    /// Number of bytes that will be written to the `send_buf` in this state.
     pub const fn send_bytes(&self) -> usize {
         SERVER_HELLO_BYTES
     }
 }
 
 impl Handshake<RecvClientAuth> {
+    /// Receive a client auth and advance to the next server state.
     pub fn recv_client_auth(self, recv_buf: &mut [u8]) -> Result<Handshake<SendServerAccept>> {
         let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
         secretbox::open_detached(
@@ -435,14 +489,17 @@ impl Handshake<RecvClientAuth> {
             },
         })
     }
+    /// Number of bytes that will be read from the `recv_buf` in this state.
     pub const fn recv_bytes(&self) -> usize {
         CLIENT_AUTH_BYTES
     }
 }
 
+/// Size of the server accept message.
 pub const SERVER_ACCEPT_BYTES: usize = 80;
 
 impl Handshake<SendServerAccept> {
+    /// Send a server accept and advance to the next server state.
     pub fn send_server_accept(self, send_buf: &mut [u8]) -> Handshake<Complete> {
         let sig = ed25519::sign_detached(
             &concat!(
@@ -483,11 +540,14 @@ impl Handshake<SendServerAccept> {
             },
         }
     }
+    /// Number of bytes that will be written to the `send_buf` in this state.
     pub const fn send_bytes(&self) -> usize {
         SERVER_ACCEPT_BYTES
     }
 }
 
+/// Type used to group all the values obtained during a successful handshake that can be used to
+/// stablish a secure authenticated channel.
 #[derive(Debug)]
 pub struct HandshakeComplete {
     pub net_id: auth::Key,
@@ -499,6 +559,7 @@ pub struct HandshakeComplete {
 }
 
 impl Handshake<Complete> {
+    /// Create a `HandshakeComplete` out of a `Handshake` in the `Complete` state.
     pub fn complete(&self) -> HandshakeComplete {
         HandshakeComplete {
             net_id: self.base.net_id.clone(),

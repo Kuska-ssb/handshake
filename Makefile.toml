@@ -75,10 +75,15 @@ args = ["tarpaulin", "--verbose", "--all-features"]
 command = "cargo"
 args = ["clippy", "--all-features", "--", "-D", "warnings" ]
 
+[tasks.fmt]
+command = "cargo"
+args = ["fmt", "--all", "--", "--check" ]
+
 [tasks.default]
 dependencies = [
 "build",
 "test",
 "clippy",
+"fmt",
 "codecov",
 ]
