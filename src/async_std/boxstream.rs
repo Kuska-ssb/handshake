@@ -115,7 +115,7 @@ where
     R: Read + Unpin,
 {
     fn poll_read(self: Pin<&mut Self>, cx: &mut Context, buf: &mut [u8]) -> Poll<Result<usize>> {
-        trace!("poll_read {}", buf.len());
+        trace!(target:"ssb-handshake", "poll_read {}", buf.len());
 
         let this = self.get_mut();
 
@@ -123,14 +123,14 @@ where
 
         // if there's no data pending to read from deciphered text, read from underlying reader
         if this.plain_off == this.plain_len {
-            trace!("  reset");
+            trace!(target:"ssb-handshake","  reset");
 
             // read up to cipher_len
             let polled_read = Pin::new(&mut this.stream)
                 .poll_read(cx, &mut this.cipher[this.cipher_off..this.cipher_len]);
             let len = futures::ready!(polled_read)?;
 
-            trace!("  ciphertext_readed={}", len);
+            trace!(target:"ssb-handshake","  ciphertext_readed={}", len);
 
             // check if the underlying stream is EOF
             if len == 0 {
@@ -144,7 +144,7 @@ where
             // it there's not enough for filling the buffer return pending
             //   waiting underlying write to wake
             if this.cipher_off < this.cipher_len {
-                trace!(
+                trace!(target:"ssb-handshake",
                     "  needs {} more bytes to decipher",
                     this.cipher_len - this.cipher_off
                 );
@@ -158,20 +158,20 @@ where
                 .decrypt(&this.cipher[..this.cipher_len], &mut this.plain[..])?
             {
                 Decrypted::Goodbye => {
-                    trace!("  got goodbye");
+                    trace!(target:"ssb-handshake","  got goodbye");
                     this.status = Status::Closed;
                     return Poll::Ready(Ok(0));
                 }
                 Decrypted::Some(v) => v,
             };
 
-            trace!("  deciphered_len={}", written);
+            trace!(target:"ssb-handshake","  deciphered_len={}", written);
 
             // update how much bytes the next ciphered chunk is
             this.cipher_off = 0;
             this.cipher_len = this.bs_recv.recv_bytes();
 
-            trace!("  new cipher_len={}", this.cipher_len);
+            trace!(target:"ssb-handshake","  new cipher_len={}", this.cipher_len);
 
             // if no data has been deciphered, it is only the header,
             //  do force to process the body
@@ -191,7 +191,7 @@ where
         buf[..len].copy_from_slice(&this.plain[this.plain_off..this.plain_off + len]);
         this.plain_off += len;
 
-        trace!(
+        trace!(target:"ssb-handshake",
             "  readed {} from deciphered buffer ({} requested)",
             len,
             buf.len()
@@ -240,11 +240,11 @@ where
 
     // flush all written data and send it into W
     fn internal_flush(&mut self, cx: &mut Context) -> Poll<Result<()>> {
-        trace!("  internal_flush()");
+        trace!(target:"ssb-handshake","  internal_flush()");
 
         // 1) first flush pending ciphered data
         if self.cipher_off < self.cipher_len {
-            trace!(
+            trace!(target:"ssb-handshake",
                 "    pending {} ciphered data to write",
                 self.cipher_len - self.cipher_off
             );
@@ -252,7 +252,7 @@ where
                 .poll_write(cx, &self.cipher[self.cipher_off..self.cipher_len]))?;
             self.cipher_off += n;
 
-            trace!("      written {}", n);
+            trace!(target:"ssb-handshake","      written {}", n);
 
             // no more data, can be written? wait underlying writer to
             //  be available
@@ -265,7 +265,7 @@ where
 
         // 2) if there's pending data to encrypt, cipher it
         if self.plain_off < self.plain_len {
-            trace!(
+            trace!(target:"ssb-handshake",
                 "    pending {} plain data to encrypt",
                 self.plain_len - self.plain_off
             );
@@ -275,7 +275,7 @@ where
                 &mut self.cipher[..],
             )?;
 
-            trace!("      ciphered #plain={} #encrypt={}", read, written);
+            trace!(target:"ssb-handshake","      ciphered #plain={} #encrypt={}", read, written);
 
             self.plain_off += read;
 
@@ -300,7 +300,7 @@ where
 {
     // Attempt to write bytes from buf into the object.
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<Result<usize>> {
-        trace!("poll_write buf_len={}", buf.len());
+        trace!(target:"ssb-handshake","poll_write buf_len={}", buf.len());
 
         let this = self.get_mut();
 
@@ -309,7 +309,7 @@ where
 
         // there's a full packet of plaintext, write it and flush pending
         if this.plain_len == MSG_BODY_MAX_LEN {
-            trace!("  max_body_len_reached, flushing");
+            trace!(target:"ssb-handshake","  max_body_len_reached, flushing");
             futures::ready!(this.internal_flush(cx))?;
 
             // reset plaintext buffer
@@ -321,14 +321,14 @@ where
         let len = cmp::min(MSG_BODY_MAX_LEN - this.plain_len, buf.len());
         this.plain[this.plain_len..this.plain_len + len].copy_from_slice(&buf[..len]);
         this.plain_len += len;
-        trace!("  written {} bytes", len);
+        trace!(target:"ssb-handshake","  written {} bytes", len);
 
         Poll::Ready(Ok(len))
     }
 
     // Attempt to flush the object, ensuring that any buffered data reach their destination.
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
-        trace!("poll_flush ");
+        trace!(target:"ssb-handshake","poll_flush");
 
         let this = self.get_mut();
         futures::ready!(assert_not_closed(&this.status))?;
@@ -344,7 +344,7 @@ where
     fn poll_close(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Result<()>> {
         let this = self.get_mut();
 
-        trace!("poll_close ");
+        trace!(target:"ssb-handshake","poll_close");
 
         futures::ready!(assert_not_closed(&this.status))?;
 
@@ -369,7 +369,7 @@ where
         // close box stream
         this.status = Status::Closed;
 
-        trace!("  goodbyte written");
+        trace!(target:"ssb-handshake","  goodbyte written");
         Poll::Ready(Ok(()))
     }
 }
