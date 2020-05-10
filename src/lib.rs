@@ -1,4 +1,5 @@
 extern crate log;
+pub extern crate sodiumoxide;
 
 #[macro_use]
 pub mod utils;

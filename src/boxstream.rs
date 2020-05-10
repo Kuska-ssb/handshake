@@ -1,5 +1,4 @@
 extern crate log;
-extern crate sodiumoxide;
 
 use crate::handshake::HandshakeComplete;
 

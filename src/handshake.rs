@@ -1,5 +1,3 @@
-extern crate sodiumoxide;
-
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
 
 /// Helper type used to define the kind of private key in a scalar multiplication.  Used to define
