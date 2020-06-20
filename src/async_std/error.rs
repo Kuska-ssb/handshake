@@ -1,14 +1,11 @@
-#[derive(Debug)]
+use thiserror::Error;
+
+#[derive(Error, Debug)]
 pub enum Error {
+    #[error("performing handshake: {0}")]
     Handshake(crate::handshake::Error),
+    #[error("i/o: {0}")]
     Io(async_std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-impl std::error::Error for Error {}
