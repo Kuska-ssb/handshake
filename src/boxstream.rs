@@ -2,11 +2,12 @@ extern crate log;
 
 use crate::handshake::HandshakeComplete;
 
-use core::fmt;
 use core::{cmp, mem};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
 use std::convert;
 use std::io;
+
+use thiserror::Error;
 
 /// Max length of encrypted body (with MAC detached)
 pub const MSG_BODY_MAX_LEN: usize = 4096;
@@ -16,15 +17,17 @@ pub const MSG_HEADER_DEC_LEN: usize = 18;
 pub const MSG_HEADER_LEN: usize = MSG_HEADER_DEC_LEN + secretbox::MACBYTES;
 
 /// The error type for boxstream operations.  Errors originate from decryption errors.
-#[derive(Debug, PartialEq)]
+#[derive(Error, Debug, PartialEq)]
 pub enum Error {
+    #[error("secretbox::open failed in header decryption")]
     DecryptHeaderSecretbox,
+    #[error("secretbox::open failed in body decryption")]
     DecryptBodySecretbox,
+    #[error("received goodbye message")]
     GoodbyeReceived,
+    #[error("sent goodbye message")]
     GoodbyeSent,
 }
-
-impl std::error::Error for Error {}
 
 impl convert::From<Error> for io::Error {
     fn from(error: Error) -> Self {
@@ -33,19 +36,6 @@ impl convert::From<Error> for io::Error {
             Error::DecryptBodySecretbox => Self::new(io::ErrorKind::InvalidData, error),
             Error::GoodbyeReceived => Self::new(io::ErrorKind::Other, error),
             Error::GoodbyeSent => Self::new(io::ErrorKind::Other, error),
-        }
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Error::DecryptHeaderSecretbox => {
-                write!(f, "secretbox::open failed in header decryption")
-            }
-            Error::DecryptBodySecretbox => write!(f, "secretbox::open failed in body decryption"),
-            Error::GoodbyeReceived => write!(f, "received goodbye message"),
-            Error::GoodbyeSent => write!(f, "sent goodbye message"),
         }
     }
 }

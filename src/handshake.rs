@@ -1,4 +1,5 @@
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox, sign::ed25519};
+use thiserror::Error;
 
 /// Helper type used to define the kind of private key in a scalar multiplication.  Used to define
 /// scalar multiplication errors.
@@ -19,16 +20,25 @@ pub enum ScalarMultPk {
 }
 
 /// The error type for handshake operations.
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum Error {
+    #[error("failed verifing server hello")]
     RecvServerHelloAuth,
+    #[error("failed opening server secret box")]
     RecvServerAcceptSecretbox,
+    #[error("failed verifing server signature")]
     RecvServerAcceptEd25519,
+    #[error("failed verifing client hello")]
     RecvClientHelloAuth,
+    #[error("failed opening client secret box")]
     RecvClientAuthSecretbox,
+    #[error("failed verifying client signature")]
     RecvClientAuthEd25519,
+    #[error("scalar math failed (sendclientauth)")]
     SendClientAuthScalarmult(ScalarMultSk, ScalarMultPk),
+    #[error("scalar math failed (recvclienthelo)")]
     RecvClientHelloScalarmult(ScalarMultSk, ScalarMultPk),
+    #[error("scalar math failed (recvclientauth)")]
     RecvClientAuthScalarmult(ScalarMultSk, ScalarMultPk),
 }
 
