@@ -1,7 +1,9 @@
-use async_std::io::{Read, Write};
-use async_std::net::Shutdown;
-use async_std::os::unix::net::UnixStream;
-use async_std::prelude::*;
+use async_std::{
+    io::{Read, Write},
+    net::Shutdown,
+    os::unix::net::UnixStream,
+    prelude::*,
+};
 use futures::future::{self, Either, Future};
 use std::time::Duration;
 

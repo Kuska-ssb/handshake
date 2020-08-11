@@ -2,17 +2,20 @@ extern crate base64;
 extern crate crossbeam;
 extern crate kuska_handshake;
 
-use std::env;
-use std::io::{self};
-use std::net::{TcpListener, TcpStream};
+use std::{
+    env,
+    io::{self},
+    net::{TcpListener, TcpStream},
+};
 
 use crossbeam::thread;
 use log::debug;
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
-use kuska_handshake::sync::BoxStream;
-use kuska_handshake::sync::{self, handshake_client, handshake_server};
-use kuska_handshake::{KeyNonce, SharedSecret};
+use kuska_handshake::{
+    sync::{self, handshake_client, handshake_server, BoxStream},
+    KeyNonce, SharedSecret,
+};
 
 fn usage(arg0: &str) {
     eprintln!(

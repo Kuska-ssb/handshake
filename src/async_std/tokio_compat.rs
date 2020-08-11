@@ -1,10 +1,14 @@
-use tokio::net::tcp::{ReadHalf, WriteHalf};
-use tokio::net::TcpStream;
+use tokio::net::{
+    tcp::{ReadHalf, WriteHalf},
+    TcpStream,
+};
 
-use async_std::io;
-use async_std::io::{Read, Write};
-use async_std::pin::Pin;
-use async_std::task::{Context, Poll};
+use async_std::{
+    io,
+    io::{Read, Write},
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 pub struct TokioCompat<T>(T);
 

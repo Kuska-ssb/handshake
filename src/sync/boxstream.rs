@@ -1,9 +1,14 @@
-use std::{io, io::Read, io::Write};
-
-use crate::boxstream::{
-    BoxStreamRecv, BoxStreamSend, Decrypted, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
+use std::{
+    io,
+    io::{Read, Write},
 };
-use crate::handshake::HandshakeComplete;
+
+use crate::{
+    boxstream::{
+        BoxStreamRecv, BoxStreamSend, Decrypted, KeyNonce, MSG_BODY_MAX_LEN, MSG_HEADER_LEN,
+    },
+    handshake::HandshakeComplete,
+};
 
 pub struct BoxStreamRead<R> {
     stream: R,

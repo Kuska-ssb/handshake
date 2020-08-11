@@ -1,7 +1,9 @@
-use std::io::{Read, Write};
-use std::net::Shutdown;
-use std::os::unix::net::UnixStream;
-use std::time::Duration;
+use std::{
+    io::{Read, Write},
+    net::Shutdown,
+    os::unix::net::UnixStream,
+    time::Duration,
+};
 
 use crossbeam::thread;
 
