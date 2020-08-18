@@ -1,4 +1,7 @@
-use std::{convert, io, io::Read, io::Write};
+use std::{
+    convert, io,
+    io::{Read, Write},
+};
 
 // use log::debug;
 use sodiumoxide::crypto::{auth, sign::ed25519};

@@ -1,8 +1,10 @@
 extern crate base64;
 extern crate kuska_handshake;
 
-use async_std::io;
-use async_std::net::{TcpListener, TcpStream};
+use async_std::{
+    io,
+    net::{TcpListener, TcpStream},
+};
 use std::env;
 
 use sodiumoxide::crypto::{auth, sign::ed25519};

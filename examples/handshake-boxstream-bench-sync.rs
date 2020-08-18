@@ -1,15 +1,18 @@
 extern crate base64;
 extern crate kuska_handshake;
 
-use std::env;
-use std::io::{self};
-use std::net::{TcpListener, TcpStream};
+use std::{
+    env,
+    io::{self},
+    net::{TcpListener, TcpStream},
+};
 
 use sodiumoxide::crypto::{auth, sign::ed25519};
 
-use kuska_handshake::sync::BoxStream;
-use kuska_handshake::sync::{handshake_client, handshake_server};
-use kuska_handshake::KeyNonce;
+use kuska_handshake::{
+    sync::{handshake_client, handshake_server, BoxStream},
+    KeyNonce,
+};
 
 const BUF_SIZE: usize = 0x8000;
 

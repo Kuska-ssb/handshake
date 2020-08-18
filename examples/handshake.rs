@@ -2,11 +2,15 @@ extern crate base64;
 extern crate kuska_handshake;
 
 use sodiumoxide::crypto::{auth, sign::ed25519};
-use std::env;
-use std::net::{TcpListener, TcpStream};
+use std::{
+    env,
+    net::{TcpListener, TcpStream},
+};
 
-use kuska_handshake::sync::{self, handshake_client, handshake_server};
-use kuska_handshake::SharedSecret;
+use kuska_handshake::{
+    sync::{self, handshake_client, handshake_server},
+    SharedSecret,
+};
 
 fn usage(arg0: &str) {
     eprintln!(

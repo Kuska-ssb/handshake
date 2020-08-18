@@ -7,8 +7,10 @@ use async_std::{
 use log::trace;
 use std::cmp;
 
-use crate::boxstream::{BoxStreamRecv, BoxStreamSend, Decrypted, KeyNonce, MSG_BODY_MAX_LEN};
-use crate::handshake::HandshakeComplete;
+use crate::{
+    boxstream::{BoxStreamRecv, BoxStreamSend, Decrypted, KeyNonce, MSG_BODY_MAX_LEN},
+    handshake::HandshakeComplete,
+};
 
 #[derive(Debug, PartialEq)]
 pub enum Status {
@@ -386,8 +388,7 @@ fn assert_not_closed(actual: &Status) -> Poll<Result<()>> {
 
 #[cfg(test)]
 mod test {
-    use super::super::circularbuffer::CircularBuffer;
-    use super::*;
+    use super::{super::circularbuffer::CircularBuffer, *};
     use sodiumoxide::crypto::{hash::sha256, secretbox};
 
     #[async_std::test]
@@ -428,7 +429,7 @@ mod test {
         Ok(())
     }
 
-    use async_std::{io::Read, io::Write};
+    use async_std::io::{Read, Write};
     use test_utils::net_async::{net, net_fragment};
 
     const CAPACITY: usize = 0x1010;

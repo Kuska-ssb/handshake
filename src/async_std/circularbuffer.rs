@@ -3,9 +3,11 @@ use async_std::{
     task::{Context, Poll},
 };
 use log::debug;
-use std::borrow::Cow;
-use std::cmp;
-use std::io::{self, Read, Write};
+use std::{
+    borrow::Cow,
+    cmp,
+    io::{self, Read, Write},
+};
 
 #[derive(Debug)]
 pub struct CircularBuffer {

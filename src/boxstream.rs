@@ -4,8 +4,7 @@ use crate::handshake::HandshakeComplete;
 
 use core::{cmp, mem};
 use sodiumoxide::crypto::{auth, hash::sha256, scalarmult::curve25519, secretbox};
-use std::convert;
-use std::io;
+use std::{convert, io};
 
 use thiserror::Error;
 
