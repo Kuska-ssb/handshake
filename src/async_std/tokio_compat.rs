@@ -74,3 +74,5 @@ impl<T: tokio::io::AsyncWrite + Unpin> Write for TokioCompat<T> {
 impl TokioCompatExt for TcpStream {}
 impl TokioCompatExtRead for ReadHalf<'_> {}
 impl TokioCompatExtWrite for WriteHalf<'_> {}
+impl TokioCompatExtRead for tokio::io::ReadHalf<TcpStream> {}
+impl TokioCompatExtWrite for tokio::io::WriteHalf<TcpStream> {}
