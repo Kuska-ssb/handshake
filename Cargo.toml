@@ -3,12 +3,19 @@ name = "kuska-handshake"
 version = "0.1.1"
 authors = ["Dhole <dhole@riseup.net>", "Adria Massanet <adria@codecontext.io>"]
 edition = "2018"
+license-file = "LICENSE"
+description = "Secure Scuttlebutt handshake + boxstream library"
+homepage = "https://github.com/Kuska-ssb"
+repository = "https://github.com/Kuska-ssb/handshake"
+readme = "README.md"
+keywords = ["kuska", "handshake", "boxstream", "ssb", "scuttlebutt"]
+categories = ["asynchronous", "cryptography", "authentication", "network-programming"]
 
 [lib]
 name = "kuska_handshake"
 
 [dependencies]
-sodiumoxide = { git = "https://github.com/Dhole/sodiumoxidez", branch = "extra" }
+sodiumoxide = { version = "0.2.5-0", package = "kuska-sodiumoxide" }
 async-std = { version = "1.5.0", features=["unstable","attributes"] }
 futures = "0.3.5"
 log = "0.4.8"
