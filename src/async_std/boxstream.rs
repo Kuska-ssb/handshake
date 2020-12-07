@@ -124,7 +124,7 @@ where
         futures::ready!(assert_not_closed(&this.status))?;
 
         // if there's no data pending to read from deciphered text, read from underlying reader
-        if this.plain_off == this.plain_len {
+        while this.plain_off == this.plain_len {
             trace!(target:"ssb-handshake","  reset");
 
             // read up to cipher_len
@@ -143,14 +143,16 @@ where
 
             this.cipher_off += len;
 
-            // it there's not enough for filling the buffer return pending
-            //   waiting underlying write to wake
+            // If there's not enough for filling the buffer, loop over and try again.
+            // Maybe the poll_read on the underlying stream will return Pending
+            // but maybe it will give us something to chew on.
+            // Anyways, don't give up yet by returning Pending here.
             if this.cipher_off < this.cipher_len {
                 trace!(target:"ssb-handshake",
                     "  needs {} more bytes to decipher",
                     this.cipher_len - this.cipher_off
                 );
-                return Poll::Pending;
+                continue;
             }
 
             // all cipher data collected, decipher it
@@ -176,10 +178,9 @@ where
             trace!(target:"ssb-handshake","  new cipher_len={}", this.cipher_len);
 
             // if no data has been deciphered, it is only the header,
-            //  do force to process the body
+            // loop over so that we maybe read and process the body
             if written == 0 {
-                cx.waker().clone().wake();
-                return Poll::Pending;
+                continue; // this isn't even needed, but keeping it for clarity
             }
 
             // prepare plain_buffer to be readed
@@ -245,7 +246,7 @@ where
         trace!(target:"ssb-handshake","  internal_flush()");
 
         // 1) first flush pending ciphered data
-        if self.cipher_off < self.cipher_len {
+        while self.cipher_off < self.cipher_len {
             trace!(target:"ssb-handshake",
                 "    pending {} ciphered data to write",
                 self.cipher_len - self.cipher_off
@@ -256,11 +257,10 @@ where
 
             trace!(target:"ssb-handshake","      written {}", n);
 
-            // no more data, can be written? wait underlying writer to
-            //  be available
-            if self.cipher_off < self.cipher_len {
-                return Poll::Pending;
-            }
+            // No more data, can be written? Try again (while loop), maybe the
+            // underlying writer will be available this time
+            // (and if not it will return Pending).
+            // Don't give up just yet by returning Pending ourselves.
         }
 
         // {inv : self.cipher_off == self.cipher_len  }
@@ -285,11 +285,10 @@ where
             self.cipher_len = written;
             self.cipher_off = 0;
 
-            // force the calling async operation to be called again
-            //   so, eventually calls 1
-
-            cx.waker().clone().wake();
-            return Poll::Pending;
+            // Loop over to actually flush the data down to self.stream
+            // FIXME: Rust doesn't optimize tail recursion so this might cause a stack overflow in
+            // extreme circumstances. This should be changed to use a loop.
+            return self.internal_flush(cx);
         }
 
         Poll::Ready(Ok(()))
@@ -361,8 +360,8 @@ where
             this.cipher_off = 0;
 
             // force to re-call this function again
-            cx.waker().clone().wake();
-            return Poll::Pending;
+            // this tail recurson won't happen more than once so no worries about stack exhaustion
+            return Pin::new(this).poll_close(cx);
         }
 
         // close the underlying stream
