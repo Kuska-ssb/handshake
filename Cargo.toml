@@ -19,7 +19,7 @@ sodiumoxide = { version = "0.2.5-0", package = "kuska-sodiumoxide" }
 async-std = { version = "1.5.0", features=["unstable","attributes"] }
 futures = "0.3.5"
 log = "0.4.8"
-tokio = { version = "0.2.20", features=["full"] }
+tokio = { version = "0.2.20", default-features = false, features=["net", "io-util"], optional = true }
 hex = "0.4.2"
 thiserror = "1.0"
 
@@ -33,7 +33,7 @@ base64 = "0.12.1"
 default = []
 sync = []
 async_std = []
-tokio_compat = [ "async_std" ]
+tokio_compat = [ "async_std", "tokio" ]
 
 [[example]]
 name = "handshake-boxstream-bench-sync"
