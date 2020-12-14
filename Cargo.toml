@@ -1,6 +1,6 @@
 [package]
 name = "kuska-handshake"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Dhole <dhole@riseup.net>", "Adria Massanet <adria@codecontext.io>"]
 edition = "2018"
 license-file = "LICENSE"
