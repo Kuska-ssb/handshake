@@ -1,4 +1,5 @@
-[![Build Status](https://github.com/kuska-ssb/kuska-handshake/workflows/Rust/badge.svg)](https://github.com/kuska-ssb/kuska-handshake/actions?query=workflow%3ARust) 
+[![Build Status](https://github.com/kuska-ssb/kuska-handshake/workflows/Rust/badge.svg)](https://github.com/kuska-ssb/kuska-handshake/actions?query=workflow%3ARust) [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FKuska-ssb%2Fhandshake.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2FKuska-ssb%2Fhandshake?ref=badge_shield)
+
 [![codecov](https://codecov.io/gh/Kuska-ssb/kuska-handshake/branch/master/graph/badge.svg)](https://codecov.io/gh/Kuska-ssb/kuska-handshake)
 
 # kuska handshake
@@ -112,3 +113,7 @@ let (box_stream_read, box_stream_write) =
     BoxStream::from_handhake(read, write, handshake, 0x8000)
     .split_read_write();
 ```
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2FKuska-ssb%2Fhandshake.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2FKuska-ssb%2Fhandshake?ref=badge_large)
