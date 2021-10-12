@@ -3,6 +3,8 @@ use tokio::net::{
     TcpStream,
 };
 
+use tokio::io::ReadBuf;
+
 use async_std::{
     io,
     io::{Read, Write},
@@ -46,7 +48,10 @@ impl<T: tokio::io::AsyncRead + Unpin> Read for TokioCompat<T> {
         cx: &mut Context,
         buf: &mut [u8],
     ) -> Poll<Result<usize, io::Error>> {
-        Pin::new(&mut self.0).poll_read(cx, buf)
+        let mut read_buf = ReadBuf::new(buf);
+        Pin::new(&mut self.0)
+            .poll_read(cx, &mut read_buf)
+            .map(|res| res.map(|()| read_buf.filled().len()))
     }
 }
 
