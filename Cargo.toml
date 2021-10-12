@@ -16,14 +16,14 @@ name = "kuska_handshake"
 
 [dependencies]
 sodiumoxide = { version = "0.2.5-0", package = "kuska-sodiumoxide" }
-async-std = { version = "1.5.0", features=["unstable","attributes"] }
-futures = "0.3.5"
+futures = { version = "0.3.17", optional = true }
 log = "0.4.8"
 tokio = { version = "1.0", default-features = false, features=["net", "io-util"], optional = true }
 hex = "0.4.2"
 thiserror = "1.0"
 
 [dev-dependencies]
+async-std = { version = "1.10", features= ["unstable", "attributes"] }
 test_utils = { path = "test_utils" }
 crossbeam = "0.7.3"
 env_logger = "0.7.1"
@@ -32,7 +32,7 @@ base64 = "0.12.1"
 [features]
 default = []
 sync = []
-async_std = []
+async_std = [ "futures" ]
 tokio_compat = [ "async_std", "tokio" ]
 
 [[example]]

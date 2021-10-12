@@ -5,12 +5,9 @@ use tokio::net::{
 
 use tokio::io::ReadBuf;
 
-use async_std::{
-    io,
-    io::{Read, Write},
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::pin::Pin;
+use futures::task::{Context, Poll};
+use futures::io::{self, AsyncRead as Read, AsyncWrite as Write};
 
 pub struct TokioCompat<T>(T);
 

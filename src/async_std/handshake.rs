@@ -1,9 +1,8 @@
 use super::error::{Error, Result};
-use async_std::{
-    io,
-    io::{Read, Write},
-    prelude::*,
-};
+
+use futures::io::{self, AsyncRead as Read, AsyncWrite as Write};
+use futures::{AsyncWriteExt, AsyncReadExt};
+
 use sodiumoxide::crypto::{auth, sign::ed25519};
 use std::convert;
 

@@ -1,7 +1,6 @@
-use async_std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::pin::Pin;
+use futures::task::{Context, Poll};
+
 use log::debug;
 use std::{
     borrow::Cow,

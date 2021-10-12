@@ -1,9 +1,8 @@
-use async_std::{
-    io::{self, Error, ErrorKind, Read, Result, Write},
-    pin::Pin,
-    prelude::*,
-    task::{Context, Poll},
-};
+use std::pin::Pin;
+use futures::task::{Context, Poll};
+use futures::Future;
+use futures::io::{self, Error, ErrorKind, AsyncRead as Read, Result, AsyncWrite as Write};
+
 use log::trace;
 use std::cmp;
 
