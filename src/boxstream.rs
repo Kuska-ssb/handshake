@@ -212,10 +212,7 @@ impl BoxStreamSend {
             return Err(Error::GoodbyeSent);
         }
         self.goodbye = true;
-        Ok(encrypt_box_stream_goodbye(
-            &mut self.key_nonce,
-            &mut enc[..],
-        ))
+        Ok(encrypt_box_stream_goodbye(&mut self.key_nonce, enc))
     }
 
     /// Returns whether the goodbye message has been sent or not.
@@ -251,7 +248,7 @@ fn decrypt_box_stream_header(
         buf[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
     match secretbox::open_detached(
         &mut header_body_buf,
-        &secretbox::Tag::from_slice(&header_tag_buf).unwrap(),
+        &secretbox::Tag::from_slice(header_tag_buf).unwrap(),
         &key_nonce.nonce,
         &key_nonce.key,
     ) {
@@ -261,7 +258,7 @@ fn decrypt_box_stream_header(
                 Ok(Decrypted::Goodbye)
             } else {
                 Ok(Decrypted::Some(
-                    Header::from_slice(&header_body_buf).unwrap(),
+                    Header::from_slice(header_body_buf).unwrap(),
                 ))
             }
         }

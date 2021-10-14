@@ -316,7 +316,7 @@ impl Handshake<RecvServerAccept> {
         let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
         secretbox::open_detached(
             &mut enc_buf,
-            &secretbox::Tag::from_slice(&tag_buf).unwrap(),
+            &secretbox::Tag::from_slice(tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
@@ -333,7 +333,7 @@ impl Handshake<RecvServerAccept> {
         )
         .or(Err(Error::RecvServerAcceptSecretbox))?;
         let dec_buf = enc_buf;
-        let sig = ed25519::Signature::from_slice(&dec_buf).unwrap();
+        let sig = ed25519::Signature::from_slice(dec_buf).unwrap();
         if !ed25519::verify_detached(
             &sig,
             &[
@@ -450,7 +450,7 @@ impl Handshake<RecvClientAuth> {
         let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
         secretbox::open_detached(
             &mut enc_buf,
-            &secretbox::Tag::from_slice(&tag_buf).unwrap(),
+            &secretbox::Tag::from_slice(tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
                 sha256::hash(
