@@ -1,7 +1,7 @@
 use super::error::{Error, Result};
 
 use futures::io::{self, AsyncRead as Read, AsyncWrite as Write};
-use futures::{AsyncWriteExt, AsyncReadExt};
+use futures::{AsyncReadExt, AsyncWriteExt};
 
 use sodiumoxide::crypto::{auth, sign::ed25519};
 use std::convert;
@@ -82,6 +82,7 @@ mod tests {
     use super::*;
 
     use async_std::io::{Read, Write};
+    use async_std::prelude::*;
 
     use test_utils::net_async::{net, net_fragment};
 

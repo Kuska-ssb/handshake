@@ -1,7 +1,7 @@
-use std::pin::Pin;
+use futures::io::{self, AsyncRead as Read, AsyncWrite as Write, Error, ErrorKind, Result};
 use futures::task::{Context, Poll};
 use futures::Future;
-use futures::io::{self, Error, ErrorKind, AsyncRead as Read, Result, AsyncWrite as Write};
+use std::pin::Pin;
 
 use log::trace;
 use std::cmp;
@@ -428,6 +428,7 @@ mod test {
     }
 
     use async_std::io::{Read, Write};
+    use async_std::prelude::*;
     use test_utils::net_async::{net, net_fragment};
 
     const CAPACITY: usize = 0x1010;
