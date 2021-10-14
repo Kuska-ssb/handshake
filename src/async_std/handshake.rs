@@ -34,15 +34,15 @@ pub async fn handshake_client<T: Read + Write + Unpin>(
 
     let mut send_buf = &mut buf[..handshake.send_bytes()];
     let handshake = handshake.send_client_hello(&mut send_buf);
-    stream.write_all(&send_buf).await?;
+    stream.write_all(send_buf).await?;
 
     let mut recv_buf = &mut buf[..handshake.recv_bytes()];
     stream.read_exact(&mut recv_buf).await?;
-    let handshake = handshake.recv_server_hello(&recv_buf)?;
+    let handshake = handshake.recv_server_hello(recv_buf)?;
 
     let mut send_buf = &mut buf[..handshake.send_bytes()];
     let handshake = handshake.send_client_auth(&mut send_buf, server_pk)?;
-    stream.write_all(&send_buf).await?;
+    stream.write_all(send_buf).await?;
 
     let mut recv_buf = &mut buf[..handshake.recv_bytes()];
     stream.read_exact(&mut recv_buf).await?;
@@ -62,11 +62,11 @@ pub async fn handshake_server<T: Read + Write + Unpin>(
 
     let mut recv_buf = &mut buf[..handshake.recv_bytes()];
     stream.read_exact(&mut recv_buf).await?;
-    let handshake = handshake.recv_client_hello(&recv_buf)?;
+    let handshake = handshake.recv_client_hello(recv_buf)?;
 
     let mut send_buf = &mut buf[..handshake.send_bytes()];
     let handshake = handshake.send_server_hello(&mut send_buf);
-    stream.write_all(&send_buf).await?;
+    stream.write_all(send_buf).await?;
 
     let mut recv_buf = &mut buf[..handshake.recv_bytes()];
     stream.read_exact(&mut recv_buf).await?;
@@ -74,7 +74,7 @@ pub async fn handshake_server<T: Read + Write + Unpin>(
 
     let mut send_buf = &mut buf[..handshake.send_bytes()];
     let handshake = handshake.send_server_accept(&mut send_buf);
-    stream.write_all(&send_buf).await?;
+    stream.write_all(send_buf).await?;
 
     Ok(handshake.complete())
 }
