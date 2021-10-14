@@ -1,7 +1,9 @@
 use super::error::{Error, Result};
 
-use futures::io::{self, AsyncRead as Read, AsyncWrite as Write};
-use futures::{AsyncReadExt, AsyncWriteExt};
+use futures::{
+    io::{self, AsyncRead as Read, AsyncWrite as Write},
+    AsyncReadExt, AsyncWriteExt,
+};
 
 use sodiumoxide::crypto::{auth, sign::ed25519};
 use std::convert;
@@ -81,8 +83,10 @@ pub async fn handshake_server<T: Read + Write + Unpin>(
 mod tests {
     use super::*;
 
-    use async_std::io::{Read, Write};
-    use async_std::prelude::*;
+    use async_std::{
+        io::{Read, Write},
+        prelude::*,
+    };
 
     use test_utils::net_async::{net, net_fragment};
 
