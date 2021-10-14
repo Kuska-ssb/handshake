@@ -5,7 +5,7 @@ pub enum Error {
     #[error("performing handshake: {0}")]
     Handshake(crate::handshake::Error),
     #[error("i/o: {0}")]
-    Io(async_std::io::Error),
+    Io(std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

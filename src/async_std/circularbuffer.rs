@@ -1,7 +1,6 @@
-use async_std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
+use futures::task::{Context, Poll};
+use std::pin::Pin;
+
 use log::debug;
 use std::{
     borrow::Cow,
@@ -60,9 +59,9 @@ impl CircularBuffer {
             } else if self.end <= self.start && !(self.start == self.end && self.start == 0) {
                 let mut tail = Vec::with_capacity(self.end);
                 tail.resize(self.end, 0);
-                &tail[..].copy_from_slice(&self.buffer[..self.end]);
+                tail[..].copy_from_slice(&self.buffer[..self.end]);
                 self.buffer.copy_within(self.start..self.buffer.len(), 0);
-                &self.buffer[self.end..self.end + tail.len()].copy_from_slice(&tail[..]);
+                self.buffer[self.end..self.end + tail.len()].copy_from_slice(&tail[..]);
             }
         }
         self.start = 0;

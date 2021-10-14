@@ -1,9 +1,10 @@
-use async_std::{
-    io::{self, Error, ErrorKind, Read, Result, Write},
-    pin::Pin,
-    prelude::*,
+use futures::{
+    io::{self, AsyncRead as Read, AsyncWrite as Write, Error, ErrorKind, Result},
     task::{Context, Poll},
+    Future,
 };
+use std::pin::Pin;
+
 use log::trace;
 use std::cmp;
 
@@ -428,7 +429,10 @@ mod test {
         Ok(())
     }
 
-    use async_std::io::{Read, Write};
+    use async_std::{
+        io::{Read, Write},
+        prelude::*,
+    };
     use test_utils::net_async::{net, net_fragment};
 
     const CAPACITY: usize = 0x1010;
