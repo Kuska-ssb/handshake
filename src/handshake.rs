@@ -556,7 +556,7 @@ impl Handshake<SendServerAccept> {
 
 /// Type used to group all the values obtained during a successful handshake that can be used to
 /// stablish a secure authenticated channel.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HandshakeComplete {
     pub net_id: auth::Key,
     pub pk: ed25519::PublicKey,
