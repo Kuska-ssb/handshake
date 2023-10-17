@@ -386,6 +386,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unused_must_use)]
     fn test_boxstream_error() {
         let test_error = |error| {
             format!("{}", error);
