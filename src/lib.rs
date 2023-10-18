@@ -14,8 +14,9 @@ mod boxstream;
 mod handshake;
 
 pub use boxstream::{
-    BoxStreamRecv, BoxStreamSend, Error as BoxstreamError, Header, Result as BoxstreamResult,
+    BoxStreamRecv, BoxStreamSend, Error as BoxstreamError, Header, KeyNonce,
+    Result as BoxstreamResult,
 };
 pub use handshake::{
-    Error as HandshakeError, Handshake, Result as HandshakeResult, SendServerAccept,
+    Error as HandshakeError, Handshake, Result as HandshakeResult, SendServerAccept, SharedSecret,
 };
