@@ -313,9 +313,9 @@ impl Handshake<SendClientAuth> {
 
 impl Handshake<RecvServerAccept> {
     pub fn recv_server_accept(self, recv_buf: &mut [u8]) -> Result<Handshake<Complete>> {
-        let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
+        let (tag_buf, enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
         secretbox::open_detached(
-            &mut enc_buf,
+            enc_buf,
             &secretbox::Tag::from_slice(tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
@@ -447,9 +447,9 @@ impl Handshake<SendServerHello> {
 impl Handshake<RecvClientAuth> {
     /// Receive a client auth and advance to the next server state.
     pub fn recv_client_auth(self, recv_buf: &mut [u8]) -> Result<Handshake<SendServerAccept>> {
-        let (tag_buf, mut enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
+        let (tag_buf, enc_buf) = recv_buf.split_at_mut(secretbox::MACBYTES);
         secretbox::open_detached(
-            &mut enc_buf,
+            enc_buf,
             &secretbox::Tag::from_slice(tag_buf).unwrap(),
             &secretbox::Nonce([0; 24]),
             &secretbox::Key(
@@ -556,7 +556,7 @@ impl Handshake<SendServerAccept> {
 
 /// Type used to group all the values obtained during a successful handshake that can be used to
 /// stablish a secure authenticated channel.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct HandshakeComplete {
     pub net_id: auth::Key,
     pub pk: ed25519::PublicKey,

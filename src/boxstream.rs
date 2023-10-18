@@ -144,12 +144,12 @@ impl Header {
 ///
 /// Note that the nonce is not incremented since this **must** be the last nonce used.
 fn encrypt_box_stream_goodbye(key_nonce: &mut KeyNonce, enc: &mut [u8]) -> usize {
-    let (goodbye_tag_buf, mut goodbye_header_buf) =
+    let (goodbye_tag_buf, goodbye_header_buf) =
         enc[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
     goodbye_header_buf.iter_mut().for_each(|x| *x = 0);
 
     let goodbye_tag =
-        secretbox::seal_detached(&mut goodbye_header_buf, &key_nonce.nonce, &key_nonce.key);
+        secretbox::seal_detached(goodbye_header_buf, &key_nonce.nonce, &key_nonce.key);
     goodbye_tag_buf.copy_from_slice(goodbye_tag.as_ref());
     MSG_HEADER_LEN
 }
@@ -164,17 +164,16 @@ fn encrypt_box_stream_msg(key_nonce: &mut KeyNonce, buf: &[u8], enc: &mut [u8]) 
     let body_nonce = key_nonce.nonce;
     key_nonce.increment_nonce_be_inplace();
 
-    let (header_buf, mut body_buf) =
-        enc[..MSG_HEADER_LEN + body.len()].split_at_mut(MSG_HEADER_LEN);
-    let (header_tag_buf, mut header_body_buf) = header_buf.split_at_mut(secretbox::MACBYTES);
+    let (header_buf, body_buf) = enc[..MSG_HEADER_LEN + body.len()].split_at_mut(MSG_HEADER_LEN);
+    let (header_tag_buf, header_body_buf) = header_buf.split_at_mut(secretbox::MACBYTES);
     body_buf.copy_from_slice(body);
-    let body_tag = secretbox::seal_detached(&mut body_buf, &body_nonce, &key_nonce.key);
+    let body_tag = secretbox::seal_detached(body_buf, &body_nonce, &key_nonce.key);
     let header = Header {
         body_len: body.len(),
         body_mac: body_tag,
     };
     header_body_buf.copy_from_slice(&header.to_bytes());
-    let header_tag = secretbox::seal_detached(&mut header_body_buf, &header_nonce, &key_nonce.key);
+    let header_tag = secretbox::seal_detached(header_body_buf, &header_nonce, &key_nonce.key);
     header_tag_buf.copy_from_slice(header_tag.as_ref());
     (body.len(), MSG_HEADER_LEN + body.len())
 }
@@ -196,14 +195,14 @@ impl BoxStreamSend {
     /// Encrypt a single boxstream message by taking bytes from `buf` and encrypting them into
     /// `enc`.  Returns the number of bytes read from `buf` and the number of bytes written into
     /// `enc`.
-    pub fn encrypt(&mut self, buf: &[u8], mut enc: &mut [u8]) -> Result<(usize, usize)> {
+    pub fn encrypt(&mut self, buf: &[u8], enc: &mut [u8]) -> Result<(usize, usize)> {
         if self.goodbye {
             return Err(Error::GoodbyeSent);
         }
         if buf.is_empty() {
             Ok((0, 0))
         } else {
-            Ok(encrypt_box_stream_msg(&mut self.key_nonce, buf, &mut enc))
+            Ok(encrypt_box_stream_msg(&mut self.key_nonce, buf, enc))
         }
     }
     /// Encrypt a goodbye message into `enc`.  Returns the number of bytes written into `enc`.
@@ -244,10 +243,9 @@ fn decrypt_box_stream_header(
     key_nonce: &mut KeyNonce,
     buf: &mut [u8],
 ) -> Result<Decrypted<Header>> {
-    let (header_tag_buf, mut header_body_buf) =
-        buf[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
+    let (header_tag_buf, header_body_buf) = buf[..MSG_HEADER_LEN].split_at_mut(secretbox::MACBYTES);
     match secretbox::open_detached(
-        &mut header_body_buf,
+        header_body_buf,
         &secretbox::Tag::from_slice(header_tag_buf).unwrap(),
         &key_nonce.nonce,
         &key_nonce.key,
@@ -273,13 +271,8 @@ fn decrypt_box_stream_body(
     key_nonce: &mut KeyNonce,
     buf: &mut [u8],
 ) -> Result<usize> {
-    let mut body_buf = &mut buf[..header.body_len];
-    match secretbox::open_detached(
-        &mut body_buf,
-        &header.body_mac,
-        &key_nonce.nonce,
-        &key_nonce.key,
-    ) {
+    let body_buf = &mut buf[..header.body_len];
+    match secretbox::open_detached(body_buf, &header.body_mac, &key_nonce.nonce, &key_nonce.key) {
         Ok(()) => {
             key_nonce.increment_nonce_be_inplace();
             Ok(header.body_len)
@@ -393,6 +386,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(unused_must_use)]
     fn test_boxstream_error() {
         let test_error = |error| {
             format!("{}", error);
