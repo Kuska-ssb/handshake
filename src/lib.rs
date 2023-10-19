@@ -18,5 +18,6 @@ pub use boxstream::{
     Result as BoxstreamResult,
 };
 pub use handshake::{
-    Error as HandshakeError, Handshake, Result as HandshakeResult, SendServerAccept, SharedSecret,
+    Error as HandshakeError, Handshake, HandshakeComplete, Result as HandshakeResult,
+    SendServerAccept, SharedSecret,
 };
